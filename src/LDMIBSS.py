@@ -234,7 +234,7 @@ class OnlineLDMIBSS:
             yk = (y_absolute > STLAMBD) * (y_absolute - STLAMBD) * y_sign
 
             dval = np.linalg.norm(yk, 1) - 1
-            STLAMBD = max(STLAMBD + 1* dval, 0)
+            STLAMBD = max(STLAMBD + 1 * dval, 0)
 
             if np.linalg.norm(yk - ykold) < tol * np.linalg.norm(ykold):
                 break
@@ -432,6 +432,172 @@ class OnlineLDMIBSS:
             self.SIR_list = SIR_list
             self.SNR_list = SNR_list
 
+    def fit_batch_sparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        s_dim, x_dim = self.s_dim, self.x_dim
+        W, By, Be = self.W, self.By, self.Be
+        muW = self.muW
+        lambday, lambdae = self.lambday, self.lambdae
+        gamy, game = self.gamy, self.game
+        neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        h = 1 / gamy # Hopefield parameter
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+        samples = X.shape[1]
+
+        if debugging:
+            SIR_list = self.SIR_list
+            SNR_list = self.SNR_list
+            S = self.S
+            A = self.A 
+
+        for k in range(n_epochs):
+            if shuffle:
+                idx = np.random.permutation(samples)
+            else:
+                idx = np.arange(samples)
+                
+            for i_sample in tqdm(range(samples)):
+                x_current  = X[:,idx[i_sample]] # Take one input
+                xk = np.reshape(x_current, (x_dim, 1))
+                # Initialize output   
+                yk = (2.0 * np.random.rand(s_dim,1) - 1.0)/5
+
+                # Initialize membrane voltage
+                vk = h * yk * gamy
+
+                # yk = np.random.uniform(-1.1,1.1, size = (s_dim,1))
+
+                # vk = h * yk * gamy
+                yke = np.dot(W, xk)
+                # yk = yk/3
+                # Output recurrent weights
+                My = By + h * np.eye(s_dim)
+                # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
+                NumberofOutputIterations_ = neural_dynamic_iterations
+                yk, ek = self.run_neural_dynamics_sparse(yk, yke, My, gamy, Be, game, vk, 
+                                                            NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+                W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
+                ee = np.dot(Be,ek)
+                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+
+                zk = np.dot(By,yk)
+                By = 1 / lambday * (By - gamy * np.dot(zk, zk.T))
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.W = W
+                        self.Be = Be
+                        self.By = By
+                        self.SIR_list = SIR_list
+                        self.SNR_list = SNR_list
+                        self.compute_overall_mapping()
+
+                        Wf = self.Wf
+                        SIR,_ = self.CalculateSIR(A, Wf)
+                        SIR_list.append(SIR)
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIR_list), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+
+            self.W = W
+            self.Be = Be
+            self.By = By
+            self.SIR_list = SIR_list
+            self.SNR_list = SNR_list
+
+
+    def fit_batch_nnsparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        s_dim, x_dim = self.s_dim, self.x_dim
+        W, By, Be = self.W, self.By, self.Be
+        muW = self.muW
+        lambday, lambdae = self.lambday, self.lambdae
+        gamy, game = self.gamy, self.game
+        neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        h = 1 / gamy # Hopefield parameter
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+        samples = X.shape[1]
+
+        if debugging:
+            SIR_list = self.SIR_list
+            SNR_list = self.SNR_list
+            S = self.S
+            A = self.A 
+
+        for k in range(n_epochs):
+            if shuffle:
+                idx = np.random.permutation(samples)
+            else:
+                idx = np.arange(samples)
+                
+            for i_sample in tqdm(range(samples)):
+                x_current  = X[:,idx[i_sample]] # Take one input
+                xk = np.reshape(x_current, (x_dim, 1))
+                # Initialize output   
+                yk = np.zeros((s_dim, 1))
+
+                # Initialize membrane voltage
+                vk = np.zeros((s_dim, 1))
+
+                # yk = np.random.uniform(-1.1,1.1, size = (s_dim,1))
+
+                # vk = h * yk * gamy
+                yke = np.dot(W, xk)
+                # yk = yk/3
+                # Output recurrent weights
+                My = By + h * np.eye(s_dim)
+                # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
+                NumberofOutputIterations_ = neural_dynamic_iterations
+                yk, ek = self.run_neural_dynamics_nnsparse(yk, yke, My, gamy, Be, game, vk, 
+                                                            NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+                W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
+                ee = np.dot(Be,ek)
+                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+
+                zk = np.dot(By,yk)
+                By = 1 / lambday * (By - gamy * np.dot(zk, zk.T))
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.W = W
+                        self.Be = Be
+                        self.By = By
+                        self.SIR_list = SIR_list
+                        self.SNR_list = SNR_list
+                        self.compute_overall_mapping()
+
+                        Wf = self.Wf
+                        SIR,_ = self.CalculateSIR(A, Wf)
+                        SIR_list.append(SIR)
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIR_list), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+
+            self.W = W
+            self.Be = Be
+            self.By = By
+            self.SIR_list = SIR_list
+            self.SNR_list = SNR_list
     # def fit_batch_nnantisparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
     #     s_dim, x_dim = self.s_dim, self.x_dim
     #     W, By, Be = self.W, self.By, self.Be
@@ -793,7 +959,7 @@ def generate_correlated_copula_sources(rho = 0.0, df = 4, n_sources = 5, size_so
     """
     if decreasing_correlation:
         first_row = np.array([rho ** j for j in range(n_sources)])
-        calib_correl_matrix = linalg.topelitz(first_row, first_row)
+        calib_correl_matrix = linalg.toeplitz(first_row, first_row)
     else:
         calib_correl_matrix = np.eye(n_sources) * (1 - rho) + np.ones((n_sources, n_sources)) * rho
 
