@@ -914,7 +914,7 @@ class OnlineWhiten:
 
         return sk, skb, ek
 
-    def fit_batch_whiten(self, X, Rxx, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_whiten(self, X, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
         Rxx = self.Rxx
         s_dim, x_dim = self.s_dim, self.x_dim
         W, B, Ro, Winv = self.W, self.B, self.Ro, self.Winv
