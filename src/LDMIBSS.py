@@ -12,6 +12,7 @@ import logging
 from time import time
 import os
 from IPython.display import display, clear_output, Latex, Math
+from IPython import display as display1
 # np.random.seed(123)
 ############# Log-Det Mutual Information Based Blind Source Separation Neural Network ####################################
 class OnlineLDMIBSS:
@@ -683,9 +684,151 @@ class OnlineLDMIBSS:
 
 
 
+# class OnlineWhiten1:
+
+#     def __init__(self, s_dim, x_dim, W = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
+#         if W is not None:
+#             assert W.shape == (x_dim, s_dim), "The shape of the initial guess W must be (x_dim, s_dim) = (%d, %d)" % (x_dim, s_dim)
+#             W = W
+#         else:
+#             W = np.random.randn(x_dim, s_dim)/x_dim/4
+#             # for k in range(W.shape[0]):
+#             #     W[k,:] =  W[k,:]/np.linalg.norm(W[k,:])
+
+#         if B is not None:
+#             assert B.shape == (s_dim, s_dim), "The shape of the initial guess B must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+#             B = B
+#         else:
+#             B = 10 * np.eye(s_dim, s_dim)
+
+#         if Ro is not None:
+#             assert Ro.shape == (s_dim, s_dim), "The shape of the initial guess Ro must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+#             Ro = Ro
+#         else:
+#             Ro = 0.1 * np.eye(s_dim, s_dim)
+
+#         self.s_dim = s_dim
+#         self.x_dim = x_dim
+#         self.W  = W
+#         self.B = B
+#         self.Ro = Ro
+#         self.muW = muW
+#         self.p = p 
+#         self.bet = bet
+#         self.lambd = lambd
+#         self.gam = (1 - lambd) / lambd
+#         self.mus = np.zeros((s_dim, 1))
+#         self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
+#         self.WhiteFOM = []
+        
+#     def ProjectOntoLInfty(self, X, thresh = 1):
+#         return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+
+#     def compute_overall_mapping(self):
+#         # bet = self.bet
+#         # p = self.p
+#         # lambd = self.lambd
+#         # s_dim = self.s_dim
+#         # gam = self.gam
+#         # W = self.W
+#         # B = self.B
+#         # We=np.linalg.pinv((bet+(1-lambd)/p/s_dim)*np.eye(s_dim)-gam/s_dim*B)@ W*bet
+#         return self.W
+
+#     def whiten_transform(self, X):
+#         assert X.shape[0] == self.W.shape[1], "Matrix dimensions do not match for whitening matrix W and input signal X"
+#         return self.W @ X
+
+#     @staticmethod
+#     @njit
+#     def run_neural_dynamics(sk, xk, Wf, B, mus, p, bet, lambd, gam, n_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, tol = 1e-6):
+        
+#         def ProjectOntoLInfty(X, thresh):
+#             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+        
+#         s_dim = sk.shape[0]
+#         for i in range(n_iterations):
+#             muv = max([neural_lr_start/np.sqrt(i+1),neural_lr_stop])
+#             skold = sk
+#             skb = sk - mus
+#             ek = Wf @ sk - xk
+
+#             gradJ = bet * Wf.T @ ek + (1 - lambd) / p * skb / s_dim - gam / s_dim * B @ skb
+
+#             sk = sk - muv * gradJ / (np.max(np.abs(gradJ)))
+#             sk = ProjectOntoLInfty(sk, 1)
+
+#             if np.linalg.norm(sk - skold) < tol * np.linalg.norm(skold):
+#                 break
+
+#         return sk, skb, ek
+
+#     def fit_batch_whiten(self, X, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+#         s_dim, x_dim = self.s_dim, self.x_dim
+#         W, B, Ro = self.W, self.B, self.Ro
+#         muW, p, bet = self.muW, self.p, self.bet
+#         lambd, gam = self.lambd, self.gam
+#         mus = self.mus
+#         neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+#         WhiteFOM = self.WhiteFOM
+
+#         assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+#         samples = X.shape[1]
+
+#         for k in range(n_epochs):
+#             # bet = self.bet
+#             if shuffle:
+#                 idx = np.random.permutation(samples)
+#             else:
+#                 idx = np.arange(samples)
+                
+#             for i_sample in tqdm(range(samples)):
+#                 bet = 0.1/5*(1+0.1*np.log10((i_sample + k * samples)+1))
+#                 self.bet = bet
+#                 x_current  = X[:,idx[i_sample]] # Take one input
+#                 xk = np.reshape(x_current, (x_dim, 1))
+
+#                 sk = np.random.randn(s_dim, 1) / 10
+
+#                 sk, skb, ek = self.run_neural_dynamics(sk, xk, W, B, mus, p, bet, lambd, gam, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+#                 p = lambd * p + (1- lambd) * np.dot(skb.T, skb)/s_dim
+#                 W = W + muW * np.dot(ek, sk.T) / np.sqrt(i_sample + 1)
+#                 zk = np.dot(B, skb)
+
+#                 B = 1/lambd * (B - gam * np.dot(zk, zk.T))
+#                 Ro = lambd * Ro + (1 - lambd) * np.dot(skb, skb.T)
+
+#                 if np.mod(i_sample, debug_iteration_point) == 0:
+
+#                     Rz = Ro.copy()
+#                     Rzd = np.linalg.norm(np.diag(Rz)) ** 2
+#                     Rzo = np.linalg.norm(Rz, 'fro') ** 2 - Rzd
+#                     SIR = 10 * np.log10(Rzd / Rzo)
+#                     WhiteFOM.append(SIR)
+                    
+#                     self.W = W
+#                     self.B = B
+#                     self.Ro = Ro
+#                     self.WhiteFOM = WhiteFOM
+
+#                     if plot_in_jupyter:
+#                         pl.clf()
+#                         pl.subplot(1,1,1)
+#                         pl.plot(np.array(WhiteFOM))
+#                         pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+#                         pl.ylabel("SIR (dB)", fontsize = 15)
+#                         pl.title("SIR Behaviour", fontsize = 15)
+#                         pl.grid()
+#                         display.clear_output(wait=True)
+#                         display.display(pl.gcf())
+                    
+#                 if WhiteFOM[-1] > required_SIR:
+#                     break
+
 class OnlineWhiten:
 
-    def __init__(self, s_dim, x_dim, W = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
+    def __init__(self, s_dim, x_dim, W = None, Winv = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
         if W is not None:
             assert W.shape == (x_dim, s_dim), "The shape of the initial guess W must be (x_dim, s_dim) = (%d, %d)" % (x_dim, s_dim)
             W = W
@@ -693,6 +836,12 @@ class OnlineWhiten:
             W = np.random.randn(x_dim, s_dim)/x_dim/4
             # for k in range(W.shape[0]):
             #     W[k,:] =  W[k,:]/np.linalg.norm(W[k,:])
+
+        if Winv is not None:
+            assert Winv.shape == (s_dim, x_dim), "The shape of the initial guess Winv must be (s_dim, x_dim) = (%d, %d)" % (s_dim, x_dim)
+            Winv = Winv
+        else:
+            Winv = np.random.randn(s_dim,x_dim)/x_dim
 
         if B is not None:
             assert B.shape == (s_dim, s_dim), "The shape of the initial guess B must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
@@ -704,11 +853,12 @@ class OnlineWhiten:
             assert Ro.shape == (s_dim, s_dim), "The shape of the initial guess Ro must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
             Ro = Ro
         else:
-            Ro = 0.1 * np.eye(s_dim, s_dim)
+            Ro = 0.1 * np.eye(s_dim, s_dim) + 0.1 * np.random.randn(s_dim, s_dim)
 
         self.s_dim = s_dim
         self.x_dim = x_dim
         self.W  = W
+        self.Winv = Winv
         self.B = B
         self.Ro = Ro
         self.muW = muW
@@ -719,20 +869,22 @@ class OnlineWhiten:
         self.mus = np.zeros((s_dim, 1))
         self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
         self.WhiteFOM = []
+        self.Rxx = 0.01 * np.random.randn(x_dim, x_dim)
         
     def ProjectOntoLInfty(self, X, thresh = 1):
         return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
 
     def compute_overall_mapping(self):
-        # bet = self.bet
-        # p = self.p
-        # lambd = self.lambd
-        # s_dim = self.s_dim
-        # gam = self.gam
-        # W = self.W
-        # B = self.B
-        # We=np.linalg.pinv((bet+(1-lambd)/p/s_dim)*np.eye(s_dim)-gam/s_dim*B)@ W*bet
-        return self.W
+        bet = self.bet
+        p = self.p
+        lambd = self.lambd
+        s_dim = self.s_dim
+        gam = self.gam
+        W = self.W
+        B = self.B
+
+        We = bet * np.linalg.pinv(bet * W.T @ W + ((1 - lambd) / s_dim * p) * np.eye(s_dim, s_dim) - (gam / s_dim) * B) @ W.T
+        return We
 
     def whiten_transform(self, X):
         assert X.shape[0] == self.W.shape[1], "Matrix dimensions do not match for whitening matrix W and input signal X"
@@ -750,9 +902,9 @@ class OnlineWhiten:
             muv = max([neural_lr_start/np.sqrt(i+1),neural_lr_stop])
             skold = sk
             skb = sk - mus
-            ek = Wf @ sk - xk
+            ek = sk - np.dot(Wf, xk)#Wf @ xk
 
-            gradJ = bet * Wf.T @ ek + (1 - lambd) / p * skb / s_dim - gam / s_dim * B @ skb
+            gradJ = bet * ek + (1 - lambd) / p * skb / s_dim - gam / s_dim * np.dot(B, skb)#B @ skb
 
             sk = sk - muv * gradJ / (np.max(np.abs(gradJ)))
             sk = ProjectOntoLInfty(sk, 1)
@@ -762,9 +914,10 @@ class OnlineWhiten:
 
         return sk, skb, ek
 
-    def fit_batch_whiten(self, X, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_whiten(self, X, Rxx, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+        Rxx = self.Rxx
         s_dim, x_dim = self.s_dim, self.x_dim
-        W, B, Ro = self.W, self.B, self.Ro
+        W, B, Ro, Winv = self.W, self.B, self.Ro, self.Winv
         muW, p, bet = self.muW, self.p, self.bet
         lambd, gam = self.lambd, self.gam
         mus = self.mus
@@ -789,26 +942,35 @@ class OnlineWhiten:
 
                 sk = np.random.randn(s_dim, 1) / 10
 
-                sk, skb, ek = self.run_neural_dynamics(sk, xk, W, B, mus, p, bet, lambd, gam, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+                sk, skb, ek = self.run_neural_dynamics(sk, xk, Winv, B, mus, p, bet, lambd, gam, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
 
                 p = lambd * p + (1- lambd) * np.dot(skb.T, skb)/s_dim
-                W = W + muW * np.dot(ek, sk.T) / np.sqrt(i_sample + 1)
+                # W = W + muW * np.dot(ek, sk.T) / np.sqrt(i_sample + 1)
+                # print(np.dot(ek, xk.T).shape)
+                # break
+                # Winv = Winv + muW * np.dot((sk - Winv @ xk), xk.T) / np.sqrt(i_sample + 1)
+                Winv = Winv + muW * np.dot(ek, xk.T) / np.sqrt(i_sample + 1)
                 zk = np.dot(B, skb)
 
                 B = 1/lambd * (B - gam * np.dot(zk, zk.T))
                 Ro = lambd * Ro + (1 - lambd) * np.dot(skb, skb.T)
-
+                Rxx = lambd * Rxx + (1 - lambd) * np.dot(xk, xk.T)
+                mus = lambd * mus + (1 - lambd) * sk
                 if np.mod(i_sample, debug_iteration_point) == 0:
-
-                    Rz = Ro.copy()
+                    We=np.linalg.pinv((bet+(1-lambd)/p/s_dim)*np.eye(s_dim)-gam/s_dim*B)@Winv*bet
+                    self.We = We
+                    Rz=We@Rxx@We.T
                     Rzd = np.linalg.norm(np.diag(Rz)) ** 2
                     Rzo = np.linalg.norm(Rz, 'fro') ** 2 - Rzd
                     SIR = 10 * np.log10(Rzd / Rzo)
                     WhiteFOM.append(SIR)
                     
                     self.W = W
+                    self.Winv = Winv
                     self.B = B
                     self.Ro = Ro
+                    self.Rxx = Rxx
+                    self.mus = mus
                     self.WhiteFOM = WhiteFOM
 
                     if plot_in_jupyter:
@@ -819,12 +981,45 @@ class OnlineWhiten:
                         pl.ylabel("SIR (dB)", fontsize = 15)
                         pl.title("SIR Behaviour", fontsize = 15)
                         pl.grid()
-                        display.clear_output(wait=True)
-                        display.display(pl.gcf())
+                        display1.clear_output(wait=True)
+                        display1.display(pl.gcf())
                     
                 if WhiteFOM[-1] > required_SIR:
                     break
                 
+    def forward(self, X, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+        s_dim, x_dim = self.s_dim, self.x_dim
+        W, B, Ro, Winv = self.W, self.B, self.Ro, self.Winv
+        muW, p, bet = self.muW, self.p, self.bet
+        lambd, gam = self.lambd, self.gam
+        mus = self.mus
+        neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+        samples = X.shape[1]
+
+        S = np.zeros((s_dim, samples))
+        for k in range(n_epochs):
+            # bet = self.bet
+            if shuffle:
+                idx = np.random.permutation(samples)
+            else:
+                idx = np.arange(samples)
+                
+            for i_sample in tqdm(range(samples)):
+                x_current  = X[:,idx[i_sample]] # Take one input
+                xk = np.reshape(x_current, (x_dim, 1))
+
+                sk = np.random.randn(s_dim, 1) / 10
+
+                sk, skb, ek = self.run_neural_dynamics(sk, xk, W, B, mus, p, bet, lambd, gam, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+                S[:, idx[i_sample]] = sk.reshape(-1,)
+
+        return S
+
+
 def whiten_signal(X, mean_normalize = True, type_ = 3):
     """
     Input : X  ---> Input signal to be whitened
