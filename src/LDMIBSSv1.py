@@ -155,7 +155,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_antisparse(yk, yke, My, gamy, Be, game, vk, beta = 1, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
+    def run_neural_dynamics_antisparse(yk, yke, My, gamy, Be, game, vk, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
         # Hopefield parameter
         h = 1 / gamy
         def ProjectOntoLInfty(X, thresh = 1.0):
@@ -169,7 +169,7 @@ class OnlineLDMIBSS:
             # Gradient of the entropy cost H(y)
             grady = gamy * np.dot(My, yk)
             # Gradient for H(yk|xk)
-            grade = game * (np.dot(Be, ek) + beta * ek)
+            grade = game * (np.dot(Be, ek) + ek)
             # Overall gradient
             gradv = -vk + grady - grade
             # Update v
@@ -183,7 +183,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnantisparse(yk, yke, My, gamy, Be, game, vk, beta = 1, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
+    def run_neural_dynamics_nnantisparse(yk, yke, My, gamy, Be, game, vk, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
         # Hopefield parameter
         h = 1 / gamy
         def ProjectOntoNNLInfty(X, thresh = 1.0):
@@ -197,7 +197,7 @@ class OnlineLDMIBSS:
             # Gradient of the entropy cost H(y)
             grady = gamy * np.dot(My, yk)
             # Gradient for H(yk|xk)
-            grade = game * (np.dot(Be, ek) + beta*ek)
+            grade = game * (np.dot(Be, ek) + ek)
             # Overall gradient
             gradv = -vk + grady - grade
             # Update v
@@ -211,7 +211,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_sparse(yk, yke, My, gamy, Be, game, vk, beta = 1, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
+    def run_neural_dynamics_sparse(yk, yke, My, gamy, Be, game, vk, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
         # Hopefield parameter
         h = 1 / gamy
         STLAMBD = 0
@@ -224,7 +224,7 @@ class OnlineLDMIBSS:
             # Gradient of the entropy cost H(y)
             grady = gamy * np.dot(My, yk)
             # Gradient for H(yk|xk)
-            grade = game * (np.dot(Be, ek) + beta * ek)
+            grade = game * (np.dot(Be, ek) + ek)
             # Overall gradient
             gradv = -vk + grady - grade
             # Update v
@@ -245,7 +245,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnsparse(yk, yke, My, gamy, Be, game, vk, beta = 1, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
+    def run_neural_dynamics_nnsparse(yk, yke, My, gamy, Be, game, vk, n_iterations = 250, lr_start = 1.5, lr_stop = 0.001, tol = 1e-8):
         # Hopefield parameter
         h = 1 / gamy
         STLAMBD = 0
@@ -258,7 +258,7 @@ class OnlineLDMIBSS:
             # Gradient of the entropy cost H(y)
             grady = gamy * np.dot(My, yk)
             # Gradient for H(yk|xk)
-            grade = game * (np.dot(Be, ek) + beta * ek)
+            grade = game * (np.dot(Be, ek) + ek)
             # Overall gradient
             gradv = -vk + grady - grade
             # Update v
@@ -273,7 +273,7 @@ class OnlineLDMIBSS:
             
         return yk, ek
 
-    def fit_batch_antisparse(self, X, n_epochs, beta = 1, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_antisparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
         s_dim, x_dim = self.s_dim, self.x_dim
         W, By, Be = self.W, self.By, self.Be
         muW = self.muW
@@ -314,7 +314,7 @@ class OnlineLDMIBSS:
                 My = By + h * np.eye(s_dim)
                 # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
                 NumberofOutputIterations_ = neural_dynamic_iterations
-                yk, ek = self.run_neural_dynamics_antisparse(yk, yke, My, gamy, Be, game, vk, beta,
+                yk, ek = self.run_neural_dynamics_antisparse(yk, yke, My, gamy, Be, game, vk, 
                                                             NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
 
                 W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
@@ -353,7 +353,7 @@ class OnlineLDMIBSS:
             self.SIR_list = SIR_list
             self.SNR_list = SNR_list
 
-    def fit_batch_nnantisparse(self, X, n_epochs, beta = 1, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnantisparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
         s_dim, x_dim = self.s_dim, self.x_dim
         W, By, Be = self.W, self.By, self.Be
         muW = self.muW
@@ -395,7 +395,7 @@ class OnlineLDMIBSS:
                 My = By + h * np.eye(s_dim)
                 # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
                 NumberofOutputIterations_ = neural_dynamic_iterations
-                yk, ek = self.run_neural_dynamics_nnantisparse(yk, yke, My, gamy, Be, game, vk, beta, 
+                yk, ek = self.run_neural_dynamics_nnantisparse(yk, yke, My, gamy, Be, game, vk, 
                                                             NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
 
                 W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
@@ -434,7 +434,7 @@ class OnlineLDMIBSS:
             self.SIR_list = SIR_list
             self.SNR_list = SNR_list
 
-    def fit_batch_sparse(self, X, n_epochs, beta = 1, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_sparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
         s_dim, x_dim = self.s_dim, self.x_dim
         W, By, Be = self.W, self.By, self.Be
         muW = self.muW
@@ -478,7 +478,7 @@ class OnlineLDMIBSS:
                 My = By + h * np.eye(s_dim)
                 # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
                 NumberofOutputIterations_ = neural_dynamic_iterations
-                yk, ek = self.run_neural_dynamics_sparse(yk, yke, My, gamy, Be, game, vk, beta,
+                yk, ek = self.run_neural_dynamics_sparse(yk, yke, My, gamy, Be, game, vk, 
                                                             NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
 
                 W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
@@ -518,7 +518,7 @@ class OnlineLDMIBSS:
             self.SNR_list = SNR_list
 
 
-    def fit_batch_nnsparse(self, X, n_epochs, beta = 1, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnsparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
         s_dim, x_dim = self.s_dim, self.x_dim
         W, By, Be = self.W, self.By, self.Be
         muW = self.muW
@@ -562,7 +562,7 @@ class OnlineLDMIBSS:
                 My = By + h * np.eye(s_dim)
                 # NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
                 NumberofOutputIterations_ = neural_dynamic_iterations
-                yk, ek = self.run_neural_dynamics_nnsparse(yk, yke, My, gamy, Be, game, vk, beta,
+                yk, ek = self.run_neural_dynamics_nnsparse(yk, yke, My, gamy, Be, game, vk, 
                                                             NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
 
                 W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
@@ -600,6 +600,232 @@ class OnlineLDMIBSS:
             self.By = By
             self.SIR_list = SIR_list
             self.SNR_list = SNR_list
+    # def fit_batch_nnantisparse(self, X, n_epochs, neural_dynamic_iterations = 250, neural_lr_start = 1.5, neural_lr_stop = 0.5, shuffle = True,verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    #     s_dim, x_dim = self.s_dim, self.x_dim
+    #     W, By, Be = self.W, self.By, self.Be
+    #     muW = self.muW
+    #     lambday, lambdae = self.lambday, self.lambdae
+    #     gamy, game = self.gamy, self.game
+    #     neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+    #     debugging = self.set_ground_truth
+
+    #     h = 1 / gamy # Hopefield parameter
+    #     mx = X.mean(axis = 1)
+
+    #     assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+    #     samples = X.shape[1]
+
+    #     if debugging:
+    #         SIR_list = self.SIR_list
+    #         SNR_list = self.SNR_list
+    #         S = 2*self.ZeroOneNormalizeColumns(self.S.T).T-1
+    #         A = self.A 
+
+    #     for k in range(n_epochs):
+    #         if shuffle:
+    #             idx = np.random.permutation(samples)
+    #         else:
+    #             idx = np.arange(samples)
+                
+    #         for i_sample in tqdm(range(samples)):
+    #             x_current  = X[:,idx[i_sample]] - mx # Take one input
+    #             xk = np.reshape(x_current, (x_dim, 1))
+    #             # Initialize membrane voltage
+    #             vk = np.zeros((s_dim, 1))
+    #             # Initialize output   
+    #             yk = np.random.uniform(-1.1,1.1, size = (s_dim,1))
+
+    #             vk = h * yk * gamy
+    #             yke = np.dot(W, xk)
+    #             yk = yk/3
+    #             # Output recurrent weights
+    #             My = By + h * np.eye(s_dim)
+    #             NumberofOutputIterations_ = np.int64(5 + np.min([np.ceil(i_sample / 50000.0),neural_dynamic_iterations]))
+    #             yk, ek = self.run_neural_dynamics_antisparse(yk, yke, My, gamy, Be, game, vk,
+    #                                                          NumberofOutputIterations_, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+    #             W = (1 - 1e-6) * W + muW * (np.dot(ek,xk.T))
+    #             ee = np.dot(Be,ek)
+    #             Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+
+    #             zk = np.dot(By,yk)
+    #             By = 1 / lambday * (By - gamy * np.dot(zk, zk.T))
+
+    #             if debugging:
+    #                 if (i_sample % debug_iteration_point) == 0:
+    #                     self.W = W
+    #                     self.Be = Be
+    #                     self.By = By
+    #                     self.SIR_list = SIR_list
+    #                     self.SNR_list = SNR_list
+    #                     self.compute_overall_mapping()
+
+    #                     Wf = self.Wf
+    #                     SIR,_ = CalculateSIR(A, Wf)
+    #                     SIR_list.append(SIR)
+
+    #                     if plot_convergence_plot:
+    #                         pl.clf()
+    #                         pl.plot(np.array(SIR_list), linewidth = 3)
+    #                         pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+    #                         pl.ylabel("SIR (dB)", fontsize = 15)
+    #                         pl.title("SIR Behaviour", fontsize = 15)
+    #                         pl.grid()
+    #                         clear_output(wait=True)
+    #                         display(pl.gcf())   
+    #         #         break # WILL BE DELETED
+    #         #     break # WILL BE DELETED
+    #         # break # WILL BE DELETED
+
+    #         self.W = W
+    #         self.Be = Be
+    #         self.By = By
+    #         self.SIR_list = SIR_list
+    #         self.SNR_list = SNR_list
+
+
+
+# class OnlineWhiten1:
+
+#     def __init__(self, s_dim, x_dim, W = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
+#         if W is not None:
+#             assert W.shape == (x_dim, s_dim), "The shape of the initial guess W must be (x_dim, s_dim) = (%d, %d)" % (x_dim, s_dim)
+#             W = W
+#         else:
+#             W = np.random.randn(x_dim, s_dim)/x_dim/4
+#             # for k in range(W.shape[0]):
+#             #     W[k,:] =  W[k,:]/np.linalg.norm(W[k,:])
+
+#         if B is not None:
+#             assert B.shape == (s_dim, s_dim), "The shape of the initial guess B must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+#             B = B
+#         else:
+#             B = 10 * np.eye(s_dim, s_dim)
+
+#         if Ro is not None:
+#             assert Ro.shape == (s_dim, s_dim), "The shape of the initial guess Ro must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+#             Ro = Ro
+#         else:
+#             Ro = 0.1 * np.eye(s_dim, s_dim)
+
+#         self.s_dim = s_dim
+#         self.x_dim = x_dim
+#         self.W  = W
+#         self.B = B
+#         self.Ro = Ro
+#         self.muW = muW
+#         self.p = p 
+#         self.bet = bet
+#         self.lambd = lambd
+#         self.gam = (1 - lambd) / lambd
+#         self.mus = np.zeros((s_dim, 1))
+#         self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
+#         self.WhiteFOM = []
+        
+#     def ProjectOntoLInfty(self, X, thresh = 1):
+#         return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+
+#     def compute_overall_mapping(self):
+#         # bet = self.bet
+#         # p = self.p
+#         # lambd = self.lambd
+#         # s_dim = self.s_dim
+#         # gam = self.gam
+#         # W = self.W
+#         # B = self.B
+#         # We=np.linalg.pinv((bet+(1-lambd)/p/s_dim)*np.eye(s_dim)-gam/s_dim*B)@ W*bet
+#         return self.W
+
+#     def whiten_transform(self, X):
+#         assert X.shape[0] == self.W.shape[1], "Matrix dimensions do not match for whitening matrix W and input signal X"
+#         return self.W @ X
+
+#     @staticmethod
+#     @njit
+#     def run_neural_dynamics(sk, xk, Wf, B, mus, p, bet, lambd, gam, n_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, tol = 1e-6):
+        
+#         def ProjectOntoLInfty(X, thresh):
+#             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+        
+#         s_dim = sk.shape[0]
+#         for i in range(n_iterations):
+#             muv = max([neural_lr_start/np.sqrt(i+1),neural_lr_stop])
+#             skold = sk
+#             skb = sk - mus
+#             ek = Wf @ sk - xk
+
+#             gradJ = bet * Wf.T @ ek + (1 - lambd) / p * skb / s_dim - gam / s_dim * B @ skb
+
+#             sk = sk - muv * gradJ / (np.max(np.abs(gradJ)))
+#             sk = ProjectOntoLInfty(sk, 1)
+
+#             if np.linalg.norm(sk - skold) < tol * np.linalg.norm(skold):
+#                 break
+
+#         return sk, skb, ek
+
+#     def fit_batch_whiten(self, X, n_epochs = 1, neural_dynamic_iterations = 1550, neural_lr_start = 5, neural_lr_stop = 1e-2, shuffle = True, required_SIR = 35, debug_iteration_point = 1000, plot_in_jupyter = False):
+#         s_dim, x_dim = self.s_dim, self.x_dim
+#         W, B, Ro = self.W, self.B, self.Ro
+#         muW, p, bet = self.muW, self.p, self.bet
+#         lambd, gam = self.lambd, self.gam
+#         mus = self.mus
+#         neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+#         WhiteFOM = self.WhiteFOM
+
+#         assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+#         samples = X.shape[1]
+
+#         for k in range(n_epochs):
+#             # bet = self.bet
+#             if shuffle:
+#                 idx = np.random.permutation(samples)
+#             else:
+#                 idx = np.arange(samples)
+                
+#             for i_sample in tqdm(range(samples)):
+#                 bet = 0.1/5*(1+0.1*np.log10((i_sample + k * samples)+1))
+#                 self.bet = bet
+#                 x_current  = X[:,idx[i_sample]] # Take one input
+#                 xk = np.reshape(x_current, (x_dim, 1))
+
+#                 sk = np.random.randn(s_dim, 1) / 10
+
+#                 sk, skb, ek = self.run_neural_dynamics(sk, xk, W, B, mus, p, bet, lambd, gam, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL)
+
+#                 p = lambd * p + (1- lambd) * np.dot(skb.T, skb)/s_dim
+#                 W = W + muW * np.dot(ek, sk.T) / np.sqrt(i_sample + 1)
+#                 zk = np.dot(B, skb)
+
+#                 B = 1/lambd * (B - gam * np.dot(zk, zk.T))
+#                 Ro = lambd * Ro + (1 - lambd) * np.dot(skb, skb.T)
+
+#                 if np.mod(i_sample, debug_iteration_point) == 0:
+
+#                     Rz = Ro.copy()
+#                     Rzd = np.linalg.norm(np.diag(Rz)) ** 2
+#                     Rzo = np.linalg.norm(Rz, 'fro') ** 2 - Rzd
+#                     SIR = 10 * np.log10(Rzd / Rzo)
+#                     WhiteFOM.append(SIR)
+                    
+#                     self.W = W
+#                     self.B = B
+#                     self.Ro = Ro
+#                     self.WhiteFOM = WhiteFOM
+
+#                     if plot_in_jupyter:
+#                         pl.clf()
+#                         pl.subplot(1,1,1)
+#                         pl.plot(np.array(WhiteFOM))
+#                         pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+#                         pl.ylabel("SIR (dB)", fontsize = 15)
+#                         pl.title("SIR Behaviour", fontsize = 15)
+#                         pl.grid()
+#                         display.clear_output(wait=True)
+#                         display.display(pl.gcf())
+                    
+#                 if WhiteFOM[-1] > required_SIR:
+#                     break
 
 class OnlineNSM:
     """
@@ -826,6 +1052,9 @@ class OnlineNSM:
                             clear_output(wait = True)
                             display(pl.gcf())
                             
+
+
+
 class OnlineWhiten:
 
     def __init__(self, s_dim, x_dim, W = None, Winv = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
@@ -834,17 +1063,14 @@ class OnlineWhiten:
             W = W
         else:
             W = np.random.randn(x_dim, s_dim)/x_dim/4
-            # for k in range(W.shape[0]): #WScaling = 0.0033
-            #     W[k,:] =  WScaling * W[k,:]/np.linalg.norm(W[k,:])
+            # for k in range(W.shape[0]):
+            #     W[k,:] =  W[k,:]/np.linalg.norm(W[k,:])
 
         if Winv is not None:
             assert Winv.shape == (s_dim, x_dim), "The shape of the initial guess Winv must be (s_dim, x_dim) = (%d, %d)" % (s_dim, x_dim)
             Winv = Winv
         else:
             Winv = np.random.randn(s_dim,x_dim)/x_dim
-            # for k in range(Winv.shape[0]):
-            #     Winv[k,:] =  WScaling * Winv[k,:]/np.linalg.norm(Winv[k,:])
-
 
         if B is not None:
             assert B.shape == (s_dim, s_dim), "The shape of the initial guess B must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
