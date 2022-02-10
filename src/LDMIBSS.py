@@ -11,6 +11,7 @@ from numba import njit, jit
 import logging
 from time import time
 import os
+import math
 from IPython.display import display, clear_output, Latex, Math
 from IPython import display as display1
 # np.random.seed(123)
@@ -826,6 +827,234 @@ class OnlineLDMIBSS:
 #                 if WhiteFOM[-1] > required_SIR:
 #                     break
 
+class OnlineNSM:
+    """
+    Implementation of Online Nonnegative Similarity Matching.
+
+    Parameters:
+    ==========================================================
+    s_dim           --Dimension of the sources
+    x_dim           --Dimension of the mixtures
+    W1
+    W2
+    Dt
+    neural_OUTPUT_COMP_TOL
+    set_ground_truth
+    S               --Original Sources (for debugging only)
+    A               --Mixing Matrix (for debugging only)
+
+    Methods:
+    ===========================================================
+    whiten_input
+    snr
+    ZeroOneNormalizeData
+    ZeroOneNormalizeColumns
+    compute_overall_mapping
+    CalculateSIR
+    predict
+    run_neural_dynamics
+    fit_batch_nsm
+    """
+    def __init__(self, s_dim, x_dim, W1 = None, W2 = None, Dt = None, whiten_input_ = True, set_ground_truth = False, S = None, A = None):
+
+        if W1 is not None:
+            if whiten_input_:
+                assert W1.shape == (s_dim, s_dim), "The shape of the initial guess W1 must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+                W1 = W1
+            else:
+                assert W1.shape == (s_dim, x_dim), "The shape of the initial guess W1 must be (s_dim, x_dim) = (%d, %d)" % (s_dim, x_dim)
+                W1 = W1
+        else:
+            if whiten_input_:
+                W1 = np.eye(s_dim, s_dim)
+            else:
+                W1 = np.eye(s_dim, x_dim)
+
+        if W2 is not None:
+            assert W2.shape == (s_dim, s_dim), "The shape of the initial guess W2 must be (s_dim, s_dim) = (%d, %d)" % (s_dim, s_dim)
+            W2 = W2
+        else:
+            W2 = np.zeros((s_dim, s_dim))
+
+        if Dt is not None:
+            assert Dt.shape == (s_dim, 1), "The shape of the initial guess Dt must be (s_dim, 1) = (%d, %d)" % (s_dim, 1)
+            Dt = Dt
+        else:
+            Dt = 0.1 * np.ones((s_dim, 1))
+
+        
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.W1 = W1
+        self.W2 = W2
+        self.Dt = Dt
+        self.whiten_input_ = whiten_input_
+        self.Wpre = np.eye(x_dim)
+        self.set_ground_truth = set_ground_truth
+        self.S = S
+        self.A = A
+        self.SIRlist = []
+
+    def whiten_input(self, X):
+        x_dim = self.x_dim
+        s_dim = self.s_dim
+        N = X.shape[1]
+        # Mean of the mixtures
+        mX = np.mean(X, axis = 1).reshape((x_dim, 1))
+        # Covariance of Mixtures
+        Rxx = np.dot(X, X.T)/N - np.dot(mX, mX.T)
+        # Eigenvalue Decomposition
+        d, V = np.linalg.eig(Rxx)
+        D = np.diag(d)
+        # Sorting indexis for eigenvalues from large to small
+        ie = np.argsort(-d)
+        # Inverse square root of eigenvalues
+        ddinv = 1/np.sqrt(d[ie[:s_dim]])
+        # Pre-whitening matrix
+        Wpre = np.dot(np.diag(ddinv), V[:, ie[:s_dim]].T)#*np.sqrt(12)
+        # Whitened mixtures
+        H = np.dot(Wpre, X)
+        self.Wpre = Wpre
+        return H
+
+
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
+    def ZeroOneNormalizeData(self,data):
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+    def ZeroOneNormalizeColumns(self,X):
+        X_normalized = np.empty_like(X)
+        for i in range(X.shape[1]):
+            X_normalized[:,i] = self.ZeroOneNormalizeData(X[:,i])
+
+        return X_normalized
+
+    def compute_overall_mapping(self, return_mapping = False):
+        W1, W2 = self.W1, self.W2
+        Wpre = self.Wpre
+        W = np.linalg.pinv(np.eye(self.s_dim) + W2) @ W1 @ Wpre
+        self.W = W
+        if return_mapping:
+            return W
+
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+
+    def predict(self, X):
+        Wf = self.compute_overall_mapping(return_mapping = True)
+        return Wf @ X
+
+    @staticmethod
+    @njit
+    def run_neural_dynamics(x, y, W1, W2, n_iterations = 200):
+        for j in range(n_iterations):
+            ind = math.floor((np.random.rand(1) * y.shape[0])[0])         
+            y[ind, :] = np.maximum(np.dot(W1[ind, :], x) - np.dot(W2[ind, :], y), 0)
+
+        return y
+
+    def fit_batch_nsm(self, X, n_epochs = 1, neural_dynamic_iterations = 250, shuffle = True, debug_iteration_point = 100, plot_in_jupyter = False):
+        s_dim, x_dim = self.s_dim, self.x_dim
+        W1, W2, Dt = self.W1, self.W2, self.Dt
+        debugging = self.set_ground_truth
+        ZERO_CHECK_INTERVAL = 1500
+        nzerocount = np.zeros(s_dim)
+        whiten_input_ = self.whiten_input_
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose, or you need to change one of the following hyperparameters: s_dim, x_dim"
+        samples = X.shape[1]
+
+        if whiten_input_:
+            X_ = self.whiten_input(X)
+            x_dim = X_.shape[0]
+        else:
+            X_ = X
+
+        Wpre = self.Wpre
+
+        if debugging:
+            SIRlist = self.SIRlist
+            S = self.S
+            A = self.A
+
+        for k in range(n_epochs):
+            if shuffle:
+                idx = np.random.permutation(samples)
+            else:
+                idx = np.arange(samples)
+
+            for i_sample in tqdm(range(samples)):
+                x_current = X_[:, idx[i_sample]]
+                xk = np.reshape(x_current, (-1,1))
+
+                y = np.random.rand(s_dim, 1)
+
+                y = self.run_neural_dynamics(xk, y, W1, W2, neural_dynamic_iterations)
+
+                Dt = np.minimum(3000, 0.94 * Dt + y ** 2)
+                DtD = np.diag(1 / Dt.reshape((s_dim)))
+                W1 = W1 + np.dot(DtD, (np.dot(y, (xk.T).reshape((1, x_dim))) - np.dot(np.diag((y ** 2).reshape((s_dim))), W1)))
+                W2 = W2 + np.dot(DtD, (np.dot(y, y.T) - np.dot(np.diag((y ** 2).reshape((s_dim))), W2)))
+
+                for ind in range(s_dim):
+                    W2[ind, ind] = 0
+
+                nzerocount = (nzerocount + (y.reshape(s_dim) == 0) * 1.0) * (y.reshape(s_dim) == 0)
+                if k < ZERO_CHECK_INTERVAL:
+                    q = np.argwhere(nzerocount > 50)
+                    qq = q[:,0]
+                    for iter3 in range(len(qq)):
+                        W1[qq[iter3], :] = -W1[qq[iter3], :]
+                        nzerocount[qq[iter3]] = 0
+
+                self.W1 = W1
+                self.W2 = W2
+                self.Dt = Dt
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        # self.SIRlist = SIRlist
+
+                        Wf = self.compute_overall_mapping(return_mapping = True)
+                        SIR,_ =  self.CalculateSIR(A, Wf)
+                        SIRlist.append(SIR)
+                        self.SIRlist = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behavior", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait = True)
+                            display(pl.gcf())
+                            
+
+
+
 class OnlineWhiten:
 
     def __init__(self, s_dim, x_dim, W = None, Winv = None, B = None, Ro = None, muW = 1e-2/2, p = 0.3, bet = 0.1/5, lambd = 1 - 5e-3, neural_OUTPUT_COMP_TOL = 1e-6):
@@ -955,7 +1184,7 @@ class OnlineWhiten:
                 B = 1/lambd * (B - gam * np.dot(zk, zk.T))
                 Ro = lambd * Ro + (1 - lambd) * np.dot(skb, skb.T)
                 Rxx = lambd * Rxx + (1 - lambd) * np.dot(xk, xk.T)
-                mus = lambd * mus + (1 - lambd) * sk
+                # mus = lambd * mus + (1 - lambd) * sk
                 if np.mod(i_sample, debug_iteration_point) == 0:
                     We=np.linalg.pinv((bet+(1-lambd)/p/s_dim)*np.eye(s_dim)-gam/s_dim*B)@Winv*bet
                     self.We = We
