@@ -1,5 +1,5 @@
 """
-Title: LDMIBSSv2.py
+Title: LDMIBSS.py
 
 Two Layer Recurrent Neural Network for Blind Source Separation
 
@@ -821,6 +821,591 @@ class OnlineNSM:
                             clear_output(wait = True)
                             display(pl.gcf())
  
+class OnlineBCA:
+    """
+    Implementation of online two layer Recurrent Neural Network with Local Update Rule for Unsupervised Seperation of Sources.
+    Reference: B. Simsek and A. T. Erdogan, "Online Bounded Component Analysis: A Simple Recurrent Neural Network with Local Update Rule for Unsupervised Separation of Dependent and Independent Sources," 2019
+    
+    Parameters:
+    =================================
+    s_dim          -- Dimension of the sources
+    x_dim          -- Dimension of the mixtures
+    F              -- Feedforward Synaptic Connection Matrix, must be size of (s_dim, x_dim)
+    B              -- Recurrent Synaptic Connection Matrix, must be size of (s_dim, s_dim)
+    lambda_        -- Forgetting factor (close to 1, but less than 1)
+    
+    gamma_hat
+    beta
+    mu_F
+    mu_y
+    
+    
+    Methods:
+    ==================================
+    
+    whiten_signal(X)        -- Whiten the given batch signal X
+    
+    ProjectOntoLInfty(X)   -- Project the given vector X onto L_infinity norm ball
+    
+    fit_next_antisparse(x_online)     -- Updates the network parameters for one data point x_online
+    
+    fit_batch_antisparse(X_batch)     -- Updates the network parameters for given batch data X_batch (but in online manner)
+    
+    """
+    
+    def __init__(self, s_dim, x_dim, lambda_ = 0.999, mu_F = 0.03, beta = 5, F = None, B = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, S = None, A = None):
+        if F is not None:
+            assert F.shape == (s_dim, x_dim), "The shape of the initial guess F must be (s_dim, x_dim) = (%d,%d)" % (s_dim, x_dim)
+            F = F
+        else:
+            F = np.random.randn(s_dim,x_dim)
+            F = (F / np.sqrt(np.sum(np.abs(F)**2,axis = 1)).reshape(s_dim,1))
+            F = np.eye(s_dim, x_dim)
+            
+        if B is not None:
+            assert B.shape == (s_dim,s_dim), "The shape of the initial guess B must be (s_dim, s_dim) = (%d,%d)" % (s_dim,s_dim)
+            B = B
+        else:
+            B = 5*np.eye(s_dim)
+            
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.lambda_ = lambda_
+        self.beta = beta
+        self.mu_F = mu_F
+        self.gamma_hat = (1-lambda_)/lambda_
+        self.F = F
+        self.B = B
+        self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
+        self.set_ground_truth = set_ground_truth
+        self.SIRlist = []
+        self.S = S
+        self.A = A
+        
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+
+    def whiten_signal(self, X, mean_normalize = True, type_ = 3):
+        """
+        Input : X  ---> Input signal to be whitened
+        type_ : Defines the type for preprocesing matrix. type_ = 1 and 2 uses eigenvalue decomposition whereas type_ = 3 uses SVD.
+        Output: X_white  ---> Whitened signal, i.e., X_white = W_pre @ X where W_pre = (R_x^0.5)^+ (square root of sample correlation matrix)
+        """
+        if mean_normalize:
+            X = X - np.mean(X,axis = 0, keepdims = True)
+
+        cov = np.cov(X.T)
+
+        if type_ == 3: # Whitening using singular value decomposition
+            U,S,V = np.linalg.svd(cov)
+            d = np.diag(1.0 / np.sqrt(S))
+            W_pre = np.dot(U, np.dot(d, U.T))
+
+        else: # Whitening using eigenvalue decomposition
+            d,S = np.linalg.eigh(cov)
+            D = np.diag(d)
+
+            D_sqrt = np.sqrt(D * (D>0))
+
+            if type_ == 1: # Type defines how you want W_pre matrix to be
+                W_pre = np.linalg.pinv(S@D_sqrt)
+            elif type_ == 2:
+                W_pre = np.linalg.pinv(S@D_sqrt@S.T)
+
+        X_white = (W_pre @ X.T).T
+
+        return X_white, W_pre
+    
+    def ProjectOntoLInfty(self, X):
+        
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+    @staticmethod
+    @njit
+    def run_neural_dynamics_antisparse(x, y, F, B, beta, gamma_hat, mu_y_start = 0.9, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def ProjectOntoLInfty(X, thresh = 1.0):
+            return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+
+        yke = np.dot(F, x)
+        for j in range(neural_dynamic_iterations):
+            mu_y = mu_y_start / (j+1)
+            y_old = y.copy()
+            e = yke - y
+            y = y + mu_y*(gamma_hat * B @ y + beta * e)
+            y = ProjectOntoLInfty(y)
+
+            if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
+                break
+        return y
+
+    @staticmethod
+    @njit
+    def run_neural_dynamics_nnantisparse(x, y, F, B, beta, gamma_hat, mu_y_start = 0.9, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def ProjectOntoNNLInfty(X, thresh = 1.0):
+            return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh #-thresh*(X<-thresh)
+
+        yke = np.dot(F, x)
+        for j in range(neural_dynamic_iterations):
+            mu_y = mu_y_start / (j+1)
+            y_old = y.copy()
+            e = yke - y
+            y = y + mu_y*(gamma_hat * B @ y + beta * e)
+            y = ProjectOntoNNLInfty(y)
+
+            if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
+                break
+        return y
+
+    def compute_overall_mapping(self, return_mapping = False):
+        F, B, gamma_hat, beta = self.F, self.B, self.gamma_hat, self.beta
+        W = np.linalg.pinv((gamma_hat/beta) * B - np.eye(self.s_dim)) @ F
+        if return_mapping:
+            return W
+        else:
+            return None
+
+    def fit_next_antisparse(self,x_current, neural_dynamic_iterations = 250, lr_start = 0.9):
+        
+        lambda_, beta, mu_F, gamma_hat, F, B = self.lambda_, self.beta, self.mu_F, self.gamma_hat, self.F, self.B
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        
+        y = np.zeros(self.s_dim)
+        
+        y = self.run_neural_dynamics_antisparse(x_current, y, F, B, beta, gamma_hat, 
+                                                mu_y_start = lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                                                neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
+        
+        e = F @ x_current - y
+
+        F = F - mu_F * beta * np.outer(e, x_current)
+
+        B = (1/lambda_) * (B - gamma_hat * np.outer(B @ y, B @ y))        
+        
+        self.F = F
+        self.B = B
+        
+        # return y
+        
+        
+    def fit_batch_antisparse(self, X, n_epochs = 2, neural_dynamic_iterations = 250, lr_start = 0.9, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        
+        lambda_, beta, mu_F, gamma_hat, F, B = self.lambda_, self.beta, self.mu_F, self.gamma_hat, self.F, self.B
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        # Y = np.zeros((self.s_dim, samples))
+        Y = np.random.randn(self.s_dim, samples)
+        
+        
+        if shuffle:
+            idx = np.random.permutation(samples) # random permutation
+        else:
+            idx = np.arange(samples)
+            
+        if whiten:
+            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
+            X_white = X_white.T
+            A = W_pre @ A
+            self.A = A
+        else:
+            X_white = X 
+            
+            
+        for k in range(n_epochs):
+
+            for i_sample in tqdm(range(samples)):
+                x_current = X_white[:,idx[i_sample]]
+                y = np.zeros(self.s_dim)
+
+                y = self.run_neural_dynamics_antisparse(x_current, y, F, B, beta, gamma_hat, 
+                                                        mu_y_start = lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                                                        neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
+                        
+                e = F @ x_current - y
+
+                F = F - mu_F * beta * np.outer(e, x_current)
+                
+                z = B @ y
+                B = (1/lambda_) * (B - gamma_hat * np.outer(z, z))
+                # Record the seperated signal
+                Y[:,idx[i_sample]] = y
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.F = F
+                        self.B = B
+                        W = self.compute_overall_mapping(return_mapping = True)
+                        SIR = self.CalculateSIR(A, W)[0]
+                        SIRlist.append(SIR)
+                        self.SIR_list = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+        self.F = F
+        self.B = B
+        
+    def fit_batch_nnantisparse(self, X, n_epochs = 2, neural_dynamic_iterations = 250, lr_start = 0.9, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        
+        lambda_, beta, mu_F, gamma_hat, F, B = self.lambda_, self.beta, self.mu_F, self.gamma_hat, self.F, self.B
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        # Y = np.zeros((self.s_dim, samples))
+        Y = np.random.randn(self.s_dim, samples)
+        
+        
+        if shuffle:
+            idx = np.random.permutation(samples) # random permutation
+        else:
+            idx = np.arange(samples)
+            
+        if whiten:
+            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
+            X_white = X_white.T
+            A = W_pre @ A
+            self.A = A
+        else:
+            X_white = X 
+            
+            
+        for k in range(n_epochs):
+
+            for i_sample in tqdm(range(samples)):
+                x_current = X_white[:,idx[i_sample]]
+                y = np.zeros(self.s_dim)
+
+                y = self.run_neural_dynamics_nnantisparse(x_current, y, F, B, beta, gamma_hat, 
+                                                        mu_y_start = lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                                                        neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
+                        
+                e = F @ x_current - y
+
+                F = F - mu_F * beta * np.outer(e, x_current)
+                
+                z = B @ y
+                B = (1/lambda_) * (B - gamma_hat * np.outer(z, z))
+                # Record the seperated signal
+                Y[:,idx[i_sample]] = y
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.F = F
+                        self.B = B
+                        W = self.compute_overall_mapping(return_mapping = True)
+                        SIR = self.CalculateSIR(A, W)[0]
+                        SIRlist.append(SIR)
+                        self.SIR_list = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+        self.F = F
+        self.B = B
+
+class OnlineBSM:
+    """
+    BOUNDED SIMILARITY MATCHING
+    Implementation of online one layer Weighted Bounded Source Seperation Recurrent Neural Network.
+    Reference: Alper T. Erdoğan and Cengiz Pehlevan, 'Blind Source Seperation Using Neural Networks with Local Learning Rules',ICASSP 2020
+    
+    Parameters:
+    =================================
+    s_dim          -- Dimension of the sources
+    x_dim          -- Dimension of the mixtures
+    W              -- Initial guess for forward weight matrix W, must be size of s_dim by x_dim
+    M              -- Initial guess for lateral weight matrix M, must be size of s_dim by s_dim
+    D              -- Initial guess for weight (similarity weights) matrix, must be size of s_dim by s_dim
+    gamma          -- Forgetting factor for data snapshot matrix
+    mu, beta       -- Similarity weight update parameters, check equation (15) from the paper
+    
+    Methods:
+    ==================================
+    
+    whiten_signal(X)        -- Whiten the given batch signal X
+    
+    ProjectOntoLInfty(X)   -- Project the given vector X onto L_infinity norm ball
+    
+    fit_next_antisparse(x_online)     -- Updates the network parameters for one data point x_online
+    
+    fit_batch_antisparse(X_batch)     -- Updates the network parameters for given batch data X_batch (but in online manner)
+    
+    """
+    def __init__(self, s_dim, x_dim, gamma = 0.9999, mu = 1e-3, beta = 1e-7, W = None, M = None, D = None, whiten_input_ = True, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, S = None, A = None):
+        if W is not None:
+            if whiten_input_:
+                assert W.shape == (s_dim, s_dim), "The shape of the initial guess W must be (s_dim,s_dim)=(%d,%d) (because of whitening)" % (s_dim, x_dim)
+                W = W
+            else:
+                assert W.shape == (s_dim, x_dim), "The shape of the initial guess W must be (s_dim,x_dim)=(%d,%d)" % (s_dim, x_dim)
+                W = W
+        else:
+            if whiten_input_:
+                W = np.random.randn(s_dim,s_dim)
+                W = 0.0033 * (W / np.sqrt(np.sum(np.abs(W)**2,axis = 1)).reshape(s_dim,1))
+            else:
+                W = np.random.randn(s_dim,x_dim)
+                W = 0.0033 * (W / np.sqrt(np.sum(np.abs(W)**2,axis = 1)).reshape(s_dim,1))
+            # for k in range(W_HX.shape[0]):
+            #     W_HX[k,:] = WScalings[0] * W_HX[k,:]/np.linalg.norm(W_HX[k,:])
+            
+        if M is not None:
+            assert M.shape == (s_dim, s_dim), "The shape of the initial guess W must be (s_dim,s_dim)=(%d,%d)" % (s_dim, s_dim)
+            M = M
+        else:
+            M = 0.02*np.eye(s_dim)  
+            
+        if D is not None:
+            assert D.shape == (s_dim, s_dim), "The shape of the initial guess W must be (s_dim,s_dim)=(%d,%d)" % (s_dim, s_dim)
+            D = D
+        else:
+            D = 1*np.eye(s_dim)
+            
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.gamma = gamma
+        self.mu = mu
+        self.beta = beta
+        self.W = W
+        self.M = M
+        self.D = D
+        self.whiten_input_ = whiten_input_
+        self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
+        self.set_ground_truth = set_ground_truth
+        self.S = S
+        self.A = A
+        self.SIRlist = []
+        
+    def whiten_input(self, X):
+        x_dim = self.x_dim
+        s_dim = self.s_dim
+        N = X.shape[1]
+        # Mean of the mixtures
+        mX = np.mean(X, axis = 1).reshape((x_dim, 1))
+        # Covariance of Mixtures
+        Rxx = np.dot(X, X.T)/N - np.dot(mX, mX.T)
+        # Eigenvalue Decomposition
+        d, V = np.linalg.eig(Rxx)
+        D = np.diag(d)
+        # Sorting indexis for eigenvalues from large to small
+        ie = np.argsort(-d)
+        # Inverse square root of eigenvalues
+        ddinv = 1/np.sqrt(d[ie[:s_dim]])
+        # Pre-whitening matrix
+        Wpre = np.dot(np.diag(ddinv), V[:, ie[:s_dim]].T)#*np.sqrt(12)
+        # Whitened mixtures
+        H = np.dot(Wpre, X)
+        self.Wpre = Wpre
+        return H, Wpre
+
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+    
+    def ProjectOntoLInfty(self, X):
+
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+    def compute_overall_mapping(self,return_mapping = True):
+        W, M, D = self.W, self.M, self.D
+
+        Wf = np.linalg.pinv(M @ D) @ W
+        self.Wf = Wf
+
+        if return_mapping:
+            return Wf
+        else:
+            return None
+
+    @staticmethod
+    @njit
+    def run_neural_dynamics_antisparse(x, y, W, M, D,neural_dynamic_iterations = 250, lr_start = 0.1, lr_stop = 1e-15, tol = 1e-6, fast_start = False):
+
+        def ProjectOntoLInfty(X, thresh = 1.0):
+            return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+        
+        Upsilon = np.diag(np.diag(M))
+        M_hat = M - Upsilon
+        u = Upsilon @ D @ y
+
+        if fast_start:
+            u = 0.99*np.linalg.solve(M @ D, W @ x)
+            y = ProjectOntoLInfty(u / np.diag(Upsilon * D))
+
+        for j in range(neural_dynamic_iterations):
+            lr = max(lr_start/(1 + j), lr_stop)
+            yold = y
+            du = -u + (W @ x - M_hat @ D @ y)
+            # u = u - lr * du
+            y = y - lr * du
+
+            y = ProjectOntoLInfty(u / np.diag(Upsilon * D))
+
+            if np.linalg.norm(y - yold) < tol * np.linalg.norm(y):
+                break
+
+        return y
+
+    def fit_next_antisparse(self, x_current, neural_dynamic_iterations = 250, neural_lr_start = 0.3, neural_lr_stop = 1e-3, fast_start = False):
+        W = self.W
+        M = self.M
+        D = self.D
+        gamma, mu, beta = self.gamma, self.mu, self.beta
+        neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+        # Upsilon = np.diag(np.diag(M))
+        
+        # u = np.linalg.solve(M @ D, W @ x_current)
+        # y = self.ProjectOntoLInfty(u / np.diag(Upsilon * D))
+        y = np.random.randn(self.s_dim,)
+        y = self.run_neural_dynamics_antisparse(x_current, y, W, M, D, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL, fast_start)
+
+        
+        W = (gamma ** 2) * W + (1 - gamma ** 2) * np.outer(y,x_current)
+        M = (gamma ** 2) * M + (1 - gamma ** 2) * np.outer(y,y)
+        
+        D = (1 - beta) * D + mu * np.diag(np.sum(np.abs(W)**2,axis = 1) - np.diag(M @ D @ M ))
+        
+        self.W = W
+        self.M = M
+        self.D = D
+        
+        
+    def fit_batch_antisparse(self, X, n_epochs = 1, shuffle = False, neural_dynamic_iterations = 250, neural_lr_start = 0.3, neural_lr_stop = 1e-3, fast_start = False, debug_iteration_point = 1000, plot_in_jupyter = False):
+        gamma, mu, beta, W, M, D = self.gamma, self.mu, self.beta, self.W, self.M, self.D
+        neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+        SIRlist = self.SIRlist
+        whiten = self.whiten_input_
+
+        if debugging:
+            S = self.S
+            A = self.A
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+
+        Y = 0.05*np.random.randn(self.s_dim, samples)
+        
+        if shuffle:
+            idx = np.random.permutation(samples) # random permutation
+        else:
+            idx = np.arange(samples)
+            
+        if whiten:
+            X_white, W_pre = self.whiten_input(X)
+            A = W_pre @ A
+            self.A = A
+        else:
+            X_white = X
+            
+
+        for k in range(n_epochs):
+            for i_sample in tqdm(range(samples)):
+                x_current = X_white[:, idx[i_sample]] # Take one input
+                y = Y[:, idx[i_sample]]
+
+                # Upsilon = np.diag(np.diag(M)) # Following paragraph of equation (16)
+                
+                # Neural Dynamics: Equations (17) from the paper
+                
+                # u = np.linalg.solve(M @ D, W @ x_current)
+                # y = self.ProjectOntoLInfty(u / np.diag(Upsilon * D))
+                y = self.run_neural_dynamics_antisparse(x_current, y, W, M, D, neural_dynamic_iterations, neural_lr_start, neural_lr_stop, neural_OUTPUT_COMP_TOL, fast_start)
+                
+                # Synaptic & Similarity weight updates, follows from equations (12,13,14,15,16) from the paper
+                
+                W = (gamma ** 2) * W + (1 - gamma ** 2) * np.outer(y,x_current)
+                M = (gamma ** 2) * M + (1 - gamma ** 2) * np.outer(y,y)
+                D = (1 - beta) * D + mu * np.diag(np.sum(np.abs(W)**2,axis = 1) - np.diag(M @ D @ M ))
+                
+                # Record the seperated signal
+                Y[:, idx[i_sample]] = y
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.W = W
+                        self.M = M
+                        self.D = D
+                        Wf = self.compute_overall_mapping(return_mapping = True)
+                        SIR,_ = self.CalculateSIR(A, Wf)
+                        SIRlist.append(SIR)
+                        self.SIRlist = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())         
+
+        self.W = W
+        self.M = M
+        self.D = D
+
 def whiten_signal(X, mean_normalize = True, type_ = 3):
     """
     Input : X  ---> Input signal to be whitened
@@ -884,7 +1469,7 @@ def whiten_input(X, n_components = None, return_prewhitening_matrix = False):
         return H, Wpre
     else:
         return H
-        
+
 def ZeroOneNormalizeData(data):
     return (data - np.min(data)) / (np.max(data) - np.min(data))
 
