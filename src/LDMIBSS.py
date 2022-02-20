@@ -791,7 +791,7 @@ class OnlineNSM:
                     W2[ind, ind] = 0
 
                 nzerocount = (nzerocount + (y.reshape(s_dim) == 0) * 1.0) * (y.reshape(s_dim) == 0)
-                if k < ZERO_CHECK_INTERVAL:
+                if i_sample < ZERO_CHECK_INTERVAL:
                     q = np.argwhere(nzerocount > 50)
                     qq = q[:,0]
                     for iter3 in range(len(qq)):
