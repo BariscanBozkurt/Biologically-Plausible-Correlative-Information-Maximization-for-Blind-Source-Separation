@@ -265,6 +265,30 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
+    def run_neural_dynamics_simplex(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        
+        STLAMBD = 0
+        dval = 0
+        yke = np.dot(W, x)
+        for j in range(neural_dynamic_iterations):
+            mu_y = max(lr_start / (j + 1), lr_stop)
+            # mu_y = lr_start / (j + 1)
+            y_old = y.copy()
+            e = yke - y
+            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            y = y + mu_y * (grady)
+
+            y = np.maximum(y - STLAMBD, 0)
+
+            dval = np.sum(y) - 1
+            STLAMBD = STLAMBD + .1 * dval
+
+            if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
+                break
+        return y
+
+    @staticmethod
+    @njit
     def run_neural_dynamics_nnwsubsparse(x, y, nn_components, sparse_components, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
@@ -731,6 +755,88 @@ class OnlineLDMIBSS:
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
                 y = self.run_neural_dynamics_nnsparse(x_current, y, W, My, Be, beta, gamy, game, 
+                                                    neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
+                                                    neural_dynamic_tol)
+                        
+                e = y - W @ x_current
+
+                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                
+                z = By @ y
+                By = (1/lambday) * (By - gamy * np.outer(z, z))
+
+                ee = np.dot(Be,e)
+                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                # Record the seperated signal
+                Y[:,idx[i_sample]] = y
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.W = W
+                        self.By = By
+                        self.Be = Be
+                        Wf = self.compute_overall_mapping(return_mapping = True)
+                        SIR = self.CalculateSIR(A, Wf)[0]
+                        SIRlist.append(SIR)
+                        self.SIR_list = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+        self.W = W
+        self.By = By
+        self.Be = Be
+
+    def fit_batch_simplex(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        
+        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        h = 1 / gamy # Hopefield parameter
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        # Y = np.zeros((self.s_dim, samples))
+        Y = np.random.randn(self.s_dim, samples)
+        
+        
+        if shuffle:
+            idx = np.random.permutation(samples) # random permutation
+        else:
+            idx = np.arange(samples)
+            
+        if whiten:
+            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
+            X_white = X_white.T
+            A = W_pre @ A
+            self.A = A
+        else:
+            X_white = X 
+            
+            
+        for k in range(n_epochs):
+
+            for i_sample in tqdm(range(samples)):
+                x_current = X_white[:,idx[i_sample]]
+                y = np.zeros(self.s_dim)
+                # y = np.random.uniform(0,1, size = (self.s_dim,))
+                # Output recurrent weights
+                My = By + h * np.eye(self.s_dim)
+                y = self.run_neural_dynamics_simplex(x_current, y, W, My, Be, beta, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
