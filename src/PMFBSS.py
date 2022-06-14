@@ -33,36 +33,6 @@ warnings.filterwarnings("ignore")
 
 
 class OnlinePMF:
-    """
-    Implementation of online two layer Recurrent Neural Network with Local Update Rule for Unsupervised Seperation of Sources.
-    Reference: B. Simsek and A. T. Erdogan, "Online Bounded Component Analysis: A Simple Recurrent Neural Network with Local Update Rule for Unsupervised Separation of Dependent and Independent Sources," 2019
-    
-    Parameters:
-    =================================
-    s_dim          -- Dimension of the sources
-    x_dim          -- Dimension of the mixtures
-    F              -- Feedforward Synaptic Connection Matrix, must be size of (s_dim, x_dim)
-    B              -- Recurrent Synaptic Connection Matrix, must be size of (s_dim, s_dim)
-    lambda_        -- Forgetting factor (close to 1, but less than 1)
-    
-    gamma_hat
-    beta
-    mu_F
-    mu_y
-    
-    
-    Methods:
-    ==================================
-    
-    whiten_signal(X)        -- Whiten the given batch signal X
-    
-    ProjectOntoLInfty(X)   -- Project the given vector X onto L_infinity norm ball
-    
-    fit_next_antisparse(y_online)     -- Updates the network parameters for one data point y_online
-    
-    fit_batch_antisparse(Y_batch)     -- Updates the network parameters for given batch data Y_batch (but in online manner)
-    
-    """
     
     def __init__(self, s_dim, y_dim, lambda_ = 0.999, muW = 0.03, beta = 5, W = None, B = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, Sgt = None, A = None):
         if W is not None:
@@ -282,6 +252,15 @@ class OnlinePMF:
             X_sign = np.sign(X)
             X_thresholded = (X_absolute > thresh) * (X_absolute - thresh) * X_sign
             return X_thresholded
+        def ReLU(X):
+            return np.maximum(X,0)
+        def loop_intersection(lst1, lst2):
+            result = []
+            for element1 in lst1:
+                for element2 in lst2:
+                    if element1 == element2:
+                        result.append(element1)
+            return result
 
         if dummy_:
             s_ = np.zeros(s.shape[0]+1)
@@ -298,8 +277,18 @@ class OnlinePMF:
             e = ske - s
             grads = -s + gamma_hat * M @ s + beta * e
             s = s + mu_s * grads 
+            # s[nn_dims] = s[nn_dims] * (s[nn_dims] >= 0)
             for ss,sparse_dim in enumerate(sparse_dims_list):
+                # ## Following two lines was the first version.
+                # s[sparse_dim] = SoftThresholding(s[sparse_dim], STLAMBD_list[ss])
+                # STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(s[sparse_dim],1) - 1), 0)
+
                 s[sparse_dim] = SoftThresholding(s[sparse_dim], STLAMBD_list[ss])
+                # s[np.array(loop_intersection(sparse_dim, signed_dims))] = SoftThresholding(s[np.array(loop_intersection(sparse_dim, signed_dims))], STLAMBD_list[ss])
+                # s[np.array(loop_intersection(sparse_dim, nn_dims))] = ReLU(s[np.array(loop_intersection(sparse_dim, nn_dims))] - STLAMBD_list[ss])
+
+                # STLAMBD_list[ss] = max(STLAMBD_list[ss] + 1.0*(np.linalg.norm(s[np.array(loop_intersection(sparse_dim, signed_dims))],1) + np.sum(s[np.array(loop_intersection(sparse_dim, nn_dims))]) - 1), 0)
+
                 STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(s[sparse_dim],1) - 1), 0)
             
             s[signed_dims] = ProjectOntoLInfty(s[signed_dims])
@@ -354,7 +343,7 @@ class OnlinePMF:
                                                     W, B, beta, gamma_hat, 
                                                     lr_start = neural_lr_start, lr_stop=neural_lr_stop,
                                                     neural_dynamic_iterations = neural_dynamic_iterations, 
-                                                    neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
+                                                    neural_OUTPUT_COMP_TOL = neural_dynamic_tol, dummy_ = neural_dynamics_dummy)
                         
                 e = W @ y_current - s
 
