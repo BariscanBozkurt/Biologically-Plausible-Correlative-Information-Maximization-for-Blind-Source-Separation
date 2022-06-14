@@ -156,22 +156,45 @@ class OnlinePMF:
         else:
             return None
     
+    # @staticmethod
+    # @njit
+    # def run_neural_dynamics_antisparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    #     def ProjectOntoLInfty(X, thresh = 1.0):
+    #         return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+
+    #     ske = np.dot(W, y)
+    #     v = gamma_hat * s
+    #     M = B + (1/gamma_hat) * np.eye(s.shape[0])
+    #     for j in range(neural_dynamic_iterations):
+    #         mu_s = max(lr_start / (j + 1), lr_stop)
+    #         s_old = s.copy()
+    #         e = ske - s
+    #         grads = -s + gamma_hat * M @ s + beta * e
+    #         s = s + mu_s * grads 
+    #         s = ProjectOntoLInfty(s)
+
+    #         if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
+    #             break
+    #     return s
+        
     @staticmethod
     @njit
     def run_neural_dynamics_antisparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
 
+        alpha = 1/gamma_hat
         ske = np.dot(W, y)
-        v = gamma_hat * s
-        M = B + (1/gamma_hat) * np.eye(s.shape[0])
+        v = alpha * gamma_hat * s
+        M = B + alpha * np.eye(s.shape[0])
         for j in range(neural_dynamic_iterations):
             mu_s = max(lr_start / (j + 1), lr_stop)
             s_old = s.copy()
             e = ske - s
-            grads = -s + gamma_hat * M @ s + beta * e
+            grads = -v + gamma_hat * M @ s + beta * e
             s = s + mu_s * grads 
-            s = ProjectOntoLInfty(s)
+            v = s
+            s = ProjectOntoLInfty(v)
 
             if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
                 break
