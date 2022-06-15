@@ -64,7 +64,7 @@ class OnlinePMF:
     
     """
     
-    def __init__(self, s_dim, y_dim, lambda_ = 0.999, muW = 0.03, beta = 5, W = None, B = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, Sgt = None, A = None):
+    def __init__(self, s_dim, y_dim, lambda_ = 0.999, muW = 0.03, beta = 5, alpha = None, W = None, B = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, Sgt = None, A = None):
         if W is not None:
             assert W.shape == (s_dim, y_dim), "The shape of the initial guess F must be (s_dim, x_dim) = (%d,%d)" % (s_dim, y_dim)
             W = W
@@ -85,6 +85,9 @@ class OnlinePMF:
         self.beta = beta
         self.muW = muW
         self.gamma_hat = (1-lambda_)/lambda_
+        if alpha is None:
+            alpha = 0.9 * (1/self.gamma_hat)
+        self.alpha = alpha
         self.W = W
         self.B = B
         self.neural_OUTPUT_COMP_TOL = neural_OUTPUT_COMP_TOL
@@ -155,35 +158,14 @@ class OnlinePMF:
             return Wf
         else:
             return None
-    
-    # @staticmethod
-    # @njit
-    # def run_neural_dynamics_antisparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
-    #     def ProjectOntoLInfty(X, thresh = 1.0):
-    #         return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
-
-    #     ske = np.dot(W, y)
-    #     v = gamma_hat * s
-    #     M = B + (1/gamma_hat) * np.eye(s.shape[0])
-    #     for j in range(neural_dynamic_iterations):
-    #         mu_s = max(lr_start / (j + 1), lr_stop)
-    #         s_old = s.copy()
-    #         e = ske - s
-    #         grads = -s + gamma_hat * M @ s + beta * e
-    #         s = s + mu_s * grads 
-    #         s = ProjectOntoLInfty(s)
-
-    #         if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
-    #             break
-    #     return s
         
     @staticmethod
     @njit
-    def run_neural_dynamics_antisparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_antisparse(y, s, W, B, beta, gamma_hat, alpha = None, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
-
-        alpha = 1/gamma_hat
+        if alpha is None:
+            alpha = 0.9 * 1/gamma_hat
         ske = np.dot(W, y)
         v = alpha * gamma_hat * s
         M = B + alpha * np.eye(s.shape[0])
@@ -192,9 +174,9 @@ class OnlinePMF:
             s_old = s.copy()
             e = ske - s
             grads = -v + gamma_hat * M @ s + beta * e
-            s = s + mu_s * grads 
-            v = s
-            s = ProjectOntoLInfty(v)
+            v = v + mu_s * grads 
+            s = ProjectOntoLInfty(v / (alpha * gamma_hat))
+            v = alpha * gamma_hat * s
 
             if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
                 break
@@ -202,20 +184,22 @@ class OnlinePMF:
         
     @staticmethod
     @njit
-    def run_neural_dynamics_nnantisparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnantisparse(y, s, W, B, beta, gamma_hat, alpha = None, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoNNLInfty(X, thresh = 1.0):
             return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh #-thresh*(X<-thresh)
-
+        if alpha is None:
+            alpha = 0.9 * 1/gamma_hat
         ske = np.dot(W, y)
-        v = gamma_hat * s
-        M = B + (1/gamma_hat) * np.eye(s.shape[0])
+        v = alpha * gamma_hat * s
+        M = B + alpha * np.eye(s.shape[0])
         for j in range(neural_dynamic_iterations):
             mu_s = max(lr_start / (j + 1), lr_stop)
             s_old = s.copy()
             e = ske - s
-            grads = -s + gamma_hat * M @ s + beta * e
-            s = s + mu_s * grads 
-            s = ProjectOntoNNLInfty(s)
+            grads = -v + gamma_hat * M @ s + beta * e
+            v = v + mu_s * grads 
+            s = ProjectOntoNNLInfty(v / (alpha * gamma_hat))
+            v = alpha * gamma_hat * s
 
             if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
                 break
@@ -223,23 +207,28 @@ class OnlinePMF:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_sparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_sparse(y, s, W, B, beta, gamma_hat, alpha = None, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def SoftThresholding(X, thresh):
+            X_absolute = np.abs(X)
+            X_sign = np.sign(X)
+            X_thresholded = (X_absolute > thresh) * (X_absolute - thresh) * X_sign
+            return X_thresholded
+        if alpha is None:
+            alpha = 0.9 * 1/gamma_hat
         STLAMBD = 0
         dval = 0
         ske = np.dot(W, y)
-        v = gamma_hat * s
-        M = B + (1/gamma_hat) * np.eye(s.shape[0])
+        v = alpha * gamma_hat * s
+        M = B + alpha * np.eye(s.shape[0])
         for j in range(neural_dynamic_iterations):
             mu_s = max(lr_start / (j + 1), lr_stop)
             s_old = s.copy()
             e = ske - s
-            grads = -s + gamma_hat * M @ s + beta * e
-            s = s + mu_s * grads 
+            grads = -v + gamma_hat * M @ s + beta * e
+            v = v + mu_s * grads 
             # SOFT THRESHOLDING
-            s_absolute = np.abs(s)
-            s_sign = np.sign(s)
-
-            s = (s_absolute > STLAMBD) * (s_absolute - STLAMBD) * s_sign
+            s = SoftThresholding(v / (alpha * gamma_hat), STLAMBD)
+            v = alpha * gamma_hat * s
             dval = np.linalg.norm(s, 1) - 1
             STLAMBD = max(STLAMBD + 1 * dval, 0)
 
@@ -249,20 +238,24 @@ class OnlinePMF:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnsparse(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnsparse(y, s, W, B, beta, gamma_hat, alpha = None, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def ReLU(X):
+            return np.maximum(X, 0)
+        if alpha is None:
+            alpha = 0.9 * 1/gamma_hat
         STLAMBD = 0
         dval = 0
         ske = np.dot(W, y)
-        v = gamma_hat * s
-        M = B + (1/gamma_hat) * np.eye(s.shape[0])
+        v = alpha * gamma_hat * s
+        M = B + alpha * np.eye(s.shape[0])
         for j in range(neural_dynamic_iterations):
             mu_s = max(lr_start / (j + 1), lr_stop)
             s_old = s.copy()
             e = ske - s
-            grads = -s + gamma_hat * M @ s + beta * e
-            s = s + mu_s * grads 
-            s = np.maximum(s - STLAMBD, 0)
-
+            grads = -v + gamma_hat * M @ s + beta * e
+            v = v + mu_s * grads
+            s = ReLU(v / (alpha * gamma_hat) - STLAMBD)
+            v = alpha * gamma_hat * s
             dval = np.sum(s) - 1
             STLAMBD = max(STLAMBD + 1 * dval, 0)
 
@@ -272,20 +265,24 @@ class OnlinePMF:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_simplex(y, s, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_simplex(y, s, W, B, beta, gamma_hat, alpha = None, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def ReLU(X):
+            return np.maximum(X, 0)
+        if alpha is None:
+            alpha = 0.9 * 1/gamma_hat
         STLAMBD = 0
         dval = 0
         ske = np.dot(W, y)
-        v = gamma_hat * s
-        M = B + (1/gamma_hat) * np.eye(s.shape[0])
+        v = alpha * gamma_hat * s
+        M = B + alpha * np.eye(s.shape[0])
         for j in range(neural_dynamic_iterations):
             mu_s = max(lr_start / (j + 1), lr_stop)
             s_old = s.copy()
             e = ske - s
-            grads = -s + gamma_hat * M @ s + beta * e
-            s = s + mu_s * grads 
-            s = np.maximum(s - STLAMBD, 0)
-
+            grads = -v + gamma_hat * M @ s + beta * e
+            v = v + mu_s * grads
+            s = ReLU(v / (alpha * gamma_hat) - STLAMBD)
+            v = alpha * gamma_hat * s
             dval = np.sum(s) - 1
             STLAMBD = STLAMBD + .1 * dval
 
@@ -295,7 +292,8 @@ class OnlinePMF:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_general_polytope(y, s, signed_dims, nn_dims, sparse_dims_list, W, B, beta, gamma_hat, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7, dummy_ = False):
+    def run_neural_dynamics_general_polytope(y, s, signed_dims, nn_dims, sparse_dims_list, W, B, beta, gamma_hat, lr_start = 0.9, 
+                                             lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
         def ProjectOntoNNLInfty(X, thresh = 1.0):
@@ -305,11 +303,16 @@ class OnlinePMF:
             X_sign = np.sign(X)
             X_thresholded = (X_absolute > thresh) * (X_absolute - thresh) * X_sign
             return X_thresholded
+        def ReLU(X):
+            return np.maximum(X,0)
 
-        if dummy_:
-            s_ = np.zeros(s.shape[0]+1)
-            s_[:-1] = s
-            s = s_
+        def loop_intersection(lst1, lst2):
+            result = []
+            for element1 in lst1:
+                for element2 in lst2:
+                    if element1 == element2:
+                        result.append(element1)
+            return result
 
         STLAMBD_list = np.zeros(len(sparse_dims_list))
         ske = np.dot(W, y)
@@ -321,19 +324,23 @@ class OnlinePMF:
             e = ske - s
             grads = -s + gamma_hat * M @ s + beta * e
             s = s + mu_s * grads 
-            for ss,sparse_dim in enumerate(sparse_dims_list):
-                s[sparse_dim] = SoftThresholding(s[sparse_dim], STLAMBD_list[ss])
-                STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(s[sparse_dim],1) - 1), 0)
-            
-            s[signed_dims] = ProjectOntoLInfty(s[signed_dims])
-            s[nn_dims] = ProjectOntoNNLInfty(s[nn_dims])
+            if sparse_dims_list[0][0] != -1:
+                for ss,sparse_dim in enumerate(sparse_dims_list):
+                    # s[sparse_dim] = SoftThresholding(s[sparse_dim], STLAMBD_list[ss])
+                    # STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(s[sparse_dim],1) - 1), 0)
+                    if signed_dims[0] != -1:
+                        s[np.array(loop_intersection(sparse_dim, signed_dims))] = SoftThresholding(s[np.array(loop_intersection(sparse_dim, signed_dims))], STLAMBD_list[ss])
+                    if nn_dims[0] != -1:
+                        s[np.array(loop_intersection(sparse_dim, nn_dims))] = ReLU(s[np.array(loop_intersection(sparse_dim, nn_dims))] - STLAMBD_list[ss])
+                    STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(s[sparse_dim],1) - 1), 0)
+            if signed_dims[0] != -1:          
+                s[signed_dims] = ProjectOntoLInfty(s[signed_dims])
+            if nn_dims[0] != -1:
+                s[nn_dims] = ProjectOntoNNLInfty(s[nn_dims])
 
             if np.linalg.norm(s - s_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(s):
                 break
-        if dummy_:
-            return s[:-1]
-        else:
-            return s
+        return s
 
     def fit_batch_general_polytope(self, Y, signed_dims, nn_dims, sparse_dims_list, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
@@ -357,22 +364,20 @@ class OnlinePMF:
             idx = np.random.permutation(samples) # random permutation
         else:
             idx = np.arange(samples)
-            
+
+        if (signed_dims.size == 0):
+            signed_dims = np.array([-1])
+        if (nn_dims.size == 0):
+            nn_dims = np.array([-1])
+        if (not sparse_dims_list):
+            sparse_dims_list = [np.array([-1])]
+
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
                 y_current = Y[:,idx[i_sample]]
                 s = np.zeros(self.s_dim)
 
-                if (signed_dims.size == 0):
-                    neural_dynamics_dummy = True
-                    signed_dims = np.array([self.s_dim + 1])
-                if (nn_dims.size == 0):
-                    neural_dynamics_dummy = True
-                    nn_dims = np.array([self.s_dim + 1])
-                if (not sparse_dims_list):
-                    neural_dynamics_dummy = True
-                    sparse_dims_list = [np.array([self.s_dim + 1])]
                 s = self.run_neural_dynamics_general_polytope(y_current, s, signed_dims, nn_dims, sparse_dims_list,
                                                     W, B, beta, gamma_hat, 
                                                     lr_start = neural_lr_start, lr_stop=neural_lr_stop,
@@ -411,7 +416,7 @@ class OnlinePMF:
 
     def fit_batch_antisparse(self, Y, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambda_, beta, muW, gamma_hat, W, B = self.lambda_, self.beta, self.muW, self.gamma_hat, self.W, self.B
+        lambda_, beta, muW, gamma_hat, alpha, W, B = self.lambda_, self.beta, self.muW, self.gamma_hat, self.alpha, self.W, self.B
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -438,7 +443,7 @@ class OnlinePMF:
                 y_current = Y[:,idx[i_sample]]
                 s = np.zeros(self.s_dim)
 
-                s = self.run_neural_dynamics_antisparse(y_current, s, W, B, beta, gamma_hat, 
+                s = self.run_neural_dynamics_antisparse(y_current, s, W, B, beta, gamma_hat, alpha,
                                                         lr_start = neural_lr_start, lr_stop=neural_lr_stop,
                                                          neural_dynamic_iterations = neural_dynamic_iterations, 
                                                         neural_OUTPUT_COMP_TOL = neural_dynamic_tol)

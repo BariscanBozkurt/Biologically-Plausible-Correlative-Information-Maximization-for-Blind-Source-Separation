@@ -21,6 +21,12 @@ from numba import njit, jit
 from tqdm import tqdm
 from IPython.display import display, Latex, Math, clear_output
 from IPython import display as display1
+from scipy.spatial import Delaunay
+from scipy.spatial import ConvexHull  
+from numpy.linalg import det
+from scipy.stats import dirichlet
+import itertools
+import pypoman
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -349,6 +355,144 @@ class OnlineLDMIBSS:
                 break
         return y
 
+    @staticmethod
+    @njit
+    def run_neural_dynamics_general_polytope(x, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, beta, gamy, game, lr_start = 0.9, 
+                                             lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+        def ProjectOntoLInfty(X, thresh = 1.0):
+            return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+        def ProjectOntoNNLInfty(X, thresh = 1.0):
+            return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh
+        def SoftThresholding(X, thresh):
+            X_absolute = np.abs(X)
+            X_sign = np.sign(X)
+            X_thresholded = (X_absolute > thresh) * (X_absolute - thresh) * X_sign
+            return X_thresholded
+        def ReLU(X):
+            return np.maximum(X,0)
+
+        def loop_intersection(lst1, lst2):
+            result = []
+            for element1 in lst1:
+                for element2 in lst2:
+                    if element1 == element2:
+                        result.append(element1)
+            return result
+
+        STLAMBD_list = np.zeros(len(sparse_dims_list))
+        yke = np.dot(W, x)
+        for j in range(neural_dynamic_iterations):
+            mu_y = max(lr_start / (j + 1), lr_stop)
+            y_old = y.copy()
+            e = yke - y
+            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            y = y + mu_y * (grady)
+            if sparse_dims_list[0][0] != -1:
+                for ss,sparse_dim in enumerate(sparse_dims_list):
+                    # y[sparse_dim] = SoftThresholding(y[sparse_dim], STLAMBD_list[ss])
+                    # STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(y[sparse_dim],1) - 1), 0)
+                    if signed_dims[0] != -1:
+                        y[np.array(loop_intersection(sparse_dim, signed_dims))] = SoftThresholding(y[np.array(loop_intersection(sparse_dim, signed_dims))], STLAMBD_list[ss])
+                    if nn_dims[0] != -1:
+                        y[np.array(loop_intersection(sparse_dim, nn_dims))] = ReLU(y[np.array(loop_intersection(sparse_dim, nn_dims))] - STLAMBD_list[ss])
+                    STLAMBD_list[ss] = max(STLAMBD_list[ss] + (np.linalg.norm(y[sparse_dim],1) - 1), 0)
+            if signed_dims[0] != -1:
+                y[signed_dims] = ProjectOntoLInfty(y[signed_dims])
+            if nn_dims[0] != -1:
+                y[nn_dims] = ProjectOntoNNLInfty(y[nn_dims])
+
+            if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
+                break
+        return y
+
+    def fit_batch_general_polytope(self, X, signed_dims, nn_dims, sparse_dims_list, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+        
+        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+
+        h = 1 / gamy # Hopefield parameter
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        # Y = np.zeros((self.s_dim, samples))
+        Y = np.random.randn(self.s_dim, samples)
+        
+        
+        if shuffle:
+            idx = np.random.permutation(samples) # random permutation
+        else:
+            idx = np.arange(samples)
+            
+        if whiten:
+            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
+            X_white = X_white.T
+            A = W_pre @ A
+            self.A = A
+        else:
+            X_white = X 
+        
+        if (signed_dims.size == 0):
+            signed_dims = np.array([-1])
+        if (nn_dims.size == 0):
+            nn_dims = np.array([-1])
+        if (not sparse_dims_list):
+            sparse_dims_list = [np.array([-1])]
+
+        for k in range(n_epochs):
+
+            for i_sample in tqdm(range(samples)):
+                x_current = X_white[:,idx[i_sample]]
+                y = np.zeros(self.s_dim)
+
+                # Output recurrent weights
+                My = By + h * np.eye(self.s_dim)
+                y = self.run_neural_dynamics_general_polytope(  x_current, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, beta, gamy, game, 
+                                                                lr_start = neural_lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                                                                neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
+                        
+                e = y - W @ x_current
+
+                W = W + muW * beta * np.outer(e, x_current)
+                
+                z = By @ y
+                By = (1/lambday) * (By - gamy * np.outer(z, z))
+
+                ee = np.dot(Be,e)
+                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                # Record the seperated signal
+                Y[:,idx[i_sample]] = y
+
+                if debugging:
+                    if (i_sample % debug_iteration_point) == 0:
+                        self.W = W
+                        self.By = By
+                        self.Be = Be
+                        Wf = self.compute_overall_mapping(return_mapping = True)
+                        SIR = self.CalculateSIR(A, Wf)[0]
+                        SIRlist.append(SIR)
+                        self.SIR_list = SIRlist
+
+                        if plot_in_jupyter:
+                            pl.clf()
+                            pl.plot(np.array(SIRlist), linewidth = 3)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                            pl.ylabel("SIR (dB)", fontsize = 15)
+                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.grid()
+                            clear_output(wait=True)
+                            display(pl.gcf())   
+        self.W = W
+        self.By = By
+        self.Be = Be
+        
     def fit_next_antisparse(self,x_current, neural_dynamic_iterations = 250, lr_start = 0.9):
         
         lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
@@ -2178,3 +2322,56 @@ def generate_correlated_copula_sources(rho = 0.0, df = 4, n_sources = 5, size_so
     S = t.cdf(X, df).T
     return S
 
+def generate_uniform_points_in_polytope(polytope_vertices, size):
+    """"
+    polytope_vertices : vertex matrix of shape (n_dim, n_vertices)
+
+    return:
+        Samples of shape (n_dim, size)
+    """
+    polytope_vertices = polytope_vertices.T
+    dims = polytope_vertices.shape[-1]
+    hull = polytope_vertices[ConvexHull(polytope_vertices).vertices]
+    deln = hull[Delaunay(hull).simplices]
+
+    vols = np.abs(det(deln[:, :dims, :] - deln[:, dims:, :])) / np.math.factorial(dims)    
+    sample = np.random.choice(len(vols), size = size, p = vols / vols.sum())
+
+    return np.einsum('ijk, ij -> ik', deln[sample], dirichlet.rvs([1]*(dims + 1), size = size)).T
+
+def generate_practical_polytope(dim, antisparse_dims, nonnegative_dims, relative_sparse_dims_list):
+    A = []
+    b = []
+    for j in antisparse_dims:
+        row1 = [0 for _ in range(dim)]
+        row2 = row1.copy()
+        row1[j] = 1
+        A.append(row1)
+        b.append(1)
+        row2[j] = -1
+        A.append(row2)
+        b.append(1)
+
+    for j in nonnegative_dims:
+        row1 = [0 for _ in range(dim)]
+        row2 = row1.copy()
+        row1[j] = 1
+        A.append(row1)
+        b.append(1)
+        row2[j] = -1
+        A.append(row2)
+        b.append(0)
+
+    for relative_sparse_dims in relative_sparse_dims_list:
+        row = np.zeros(dim)
+        pm_one = [[1,-1] for _ in range(relative_sparse_dims.shape[0])]
+        for i in itertools.product(*pm_one):
+            row_copy = row.copy()
+            row_copy[relative_sparse_dims] = i
+            A.append(list(row_copy))
+            b.append(1)
+    A = np.array(A)
+    b = np.array(b)
+    vertices = pypoman.compute_polytope_vertices(A, b)
+    V = np.array([list(v) for v in vertices]).T
+    return (A,b), V
