@@ -167,7 +167,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * np.diag(np.diag(Be)) @ e + beta * e
             y = y + mu_y * (grady)
             y = ProjectOntoLInfty(y)
 
@@ -466,7 +466,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee, ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -515,7 +515,7 @@ class OnlineLDMIBSS:
         By = (1/lambday) * (By - gamy * np.outer(By @ y, By @ y))        
         
         ee = np.dot(Be,e)
-        Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+        Be = 1 / lambdae * (Be - game * np.outer(ee, ee))
 
         self.W = W
         self.By = By
@@ -576,7 +576,8 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                # Be = 1 / lambdae * (Be - game * np.diag(np.diag(np.dot(ee, ee.T))))
+                Be = 1 / lambdae * (Be - game * np.diag(np.diag(np.outer(ee,ee))))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -658,7 +659,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -746,7 +747,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -828,7 +829,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -910,7 +911,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -992,7 +993,8 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                # Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
+                Be = 1 / lambdae * (Be - game * np.diag(np.diag(np.outer(ee,ee))))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -1080,7 +1082,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
@@ -1168,7 +1170,7 @@ class OnlineLDMIBSS:
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
                 ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.dot(ee, ee.T))
+                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
