@@ -8,6 +8,8 @@ Code Writer: Bariscan Bozkurt (Koç University - EEE & Mathematics)
 Date: 17.02.2022
 """
 
+from random import sample
+from wave import WAVE_FORMAT_PCM
 import numpy as np
 import scipy
 from scipy.stats import invgamma, chi2, t
@@ -1197,6 +1199,133 @@ class OnlineLDMIBSS:
         self.By = By
         self.Be = Be
 
+class LDMIBSS:
+
+    """
+    Implementation of batch Log-Det Mutual Information Based Blind Source Separation Framework
+    Parameters:
+    =================================
+    s_dim          -- Dimension of the sources
+    x_dim          -- Dimension of the mixtures
+    W              -- Feedforward Synapses
+    By             -- Inverse Output Covariance
+    Be             -- Inverse Error Covariance
+    lambday        -- Ry forgetting factor
+    lambdae        -- Re forgetting factor
+
+    
+    Methods:
+    ==================================
+    run_neural_dynamics_antisparse
+    fit_batch_antisparse
+    fit_batch_nnantisparse
+
+    """
+    
+    def __init__(self, s_dim, x_dim, W = None, set_ground_truth = False, S = None, A = None):
+        if W is not None:
+            assert W.shape == (s_dim, x_dim), "The shape of the initial guess W must be (s_dim, x_dim) = (%d,%d)" % (s_dim, x_dim)
+            W = W
+        else:
+            W = np.random.randn(s_dim, x_dim)
+            
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.W = W
+        ### Ground Truth Sources and Mixing Matrix For Debugging
+        self.set_ground_truth = set_ground_truth
+        self.S = S # Sources
+        self.A = A # Mixing Matrix
+        self.SIR_list = []
+        self.SNR_list = []
+
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+
+    @staticmethod
+    @njit
+    def update_Y(Y, X, W, epsilon, step_size):
+        s_dim, samples = Y.shape[0], Y.shape[1]
+        Identity_like_Y = np.eye(s_dim)
+        RY = (1/samples) * np.dot(Y, Y.T) + epsilon * Identity_like_Y
+        E = Y - np.dot(W, X)
+        RE = (1/samples) * np.dot(E, E.T) + epsilon * Identity_like_Y
+        gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y) - np.dot(np.linalg.pinv(RE), E))
+        Y = Y + (step_size) * gradY
+        return Y
+        
+    def ProjectOntoLInfty(self, X):
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+        
+    def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        RX = (1/samples) * np.dot(X, X.T)
+        RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        Identity_like_Y = np.eye(self.s_dim)
+        for k in range(n_iterations):
+            # RY = (1/samples) * np.dot(Y, Y.T) + epsilon * Identity_like_Y
+            # # muY = np.mean(Y, axis = 1).reshape(-1,1)
+            # E = Y - np.dot(W, X)
+            # RE = (1/samples) * np.dot(E, E.T) + epsilon * Identity_like_Y
+            # gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y) - np.dot(np.linalg.pinv(RE), E))
+            # Y = Y + (mu_start/np.sqrt(k+1)) * gradY
+            Y = self.update_Y(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+            Y = self.ProjectOntoLInfty(Y)
+            RYX = (1/samples) * np.dot(Y, X.T)
+            W = np.dot(RYX, RXinv)
+
+
+            if debugging:
+                if (k % debug_iteration_point) == 0:
+                    self.W = W
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+        self.W = W
+
+        
+
 class OnlineNSM:
     """
     Implementation of Online Nonnegative Similarity Matching.
@@ -2207,6 +2336,20 @@ def CalculateSIR(H,pH, return_db = True):
         SIRV = 10*np.log10(sigpow/intpow)
 
     return SIRV,rankP
+
+def CalculateSINR(Out,S):
+    r=S.shape[0]
+    G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+    indmax=np.argmax(np.abs(G),1)
+    GG=np.zeros((r,r))
+    for kk in range(r):
+        GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+    ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+    E=Out-ZZ
+    MSE=np.linalg.norm(E,'fro')**2
+    SigPow=np.linalg.norm(ZZ,'fro')**2
+    SINR=(SigPow/MSE)
+    return SINR,SigPow,MSE,G
 
 @njit(fastmath = True)
 def accumu(lis):
