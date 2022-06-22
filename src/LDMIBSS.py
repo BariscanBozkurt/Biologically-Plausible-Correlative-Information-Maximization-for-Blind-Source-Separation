@@ -9,7 +9,6 @@ Date: 17.02.2022
 """
 
 from random import sample
-from wave import WAVE_FORMAT_PCM
 import numpy as np
 import scipy
 from scipy.stats import invgamma, chi2, t
@@ -1260,7 +1259,7 @@ class LDMIBSS:
 
     @staticmethod
     @njit
-    def update_Y(Y, X, W, epsilon, step_size):
+    def update_Y_corr_based(Y, X, W, epsilon, step_size):
         s_dim, samples = Y.shape[0], Y.shape[1]
         Identity_like_Y = np.eye(s_dim)
         RY = (1/samples) * np.dot(Y, Y.T) + epsilon * Identity_like_Y
@@ -1269,12 +1268,74 @@ class LDMIBSS:
         gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y) - np.dot(np.linalg.pinv(RE), E))
         Y = Y + (step_size) * gradY
         return Y
-        
+
+    # @njit(parallel=True)
+    # def mean_numba(a):
+
+    #     res = []
+    #     for i in range(a.shape[0]):
+    #         res.append(a[i, :].mean())
+
+    #     return np.array(res)
+
+    @staticmethod
+    @njit
+    def update_Y_cov_based(Y, X, W, epsilon, step_size):
+        def mean_numba(a):
+
+            res = []
+            for i in range(a.shape[0]):
+                res.append(a[i, :].mean())
+
+            return np.array(res)
+        s_dim, samples = Y.shape[0], Y.shape[1]
+        muY = mean_numba(Y).reshape(-1,1)
+        Identity_like_Y = np.eye(s_dim)
+        RY = (1/samples) * (np.dot(Y, Y.T) - np.outer(muY, muY)) + epsilon * Identity_like_Y
+        E = Y - np.dot(W, X)
+        muE = mean_numba(E).reshape(-1,1)
+        RE = (1/samples) * (np.dot(E, E.T) - np.outer(muE, muE)) + epsilon * Identity_like_Y
+        gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y - muY) - np.dot(np.linalg.pinv(RE), E - muE))
+        Y = Y + (step_size) * gradY
+        return Y
+
     def ProjectOntoLInfty(self, X):
         return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
     
+    def ProjectOntoNNLInfty(self, X):
+        return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
         
-    def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, debug_iteration_point = 1, plot_in_jupyter = False):
+    def ProjectRowstoL1NormBall(self, H):
+        Hshape=H.shape
+        #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
+        lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
+        #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
+
+        u=-np.sort(-np.abs(H),axis=1)
+        sv=np.cumsum(u,axis=1)
+        q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
+        rho=np.max(q,axis=1)
+        rho=rho.astype(int)
+        lindex=np.linspace(1,Hshape[0],Hshape[0])-1
+        lindex=lindex.astype(int)
+        theta=np.maximum(0,np.reshape((sv[tuple([lindex,rho])]-1)/(rho+1),(Hshape[0],1)))
+        ww=np.abs(H)-theta
+        H=np.sign(H)*(ww>0)*ww
+        return H
+
+    def ProjectColstoSimplex(self, v, z=1):
+        """v array of shape (n_features, n_samples)."""
+        p, n = v.shape
+        u = np.sort(v, axis=0)[::-1, ...]
+        pi = np.cumsum(u, axis=0) - z
+        ind = (np.arange(p) + 1).reshape(-1, 1)
+        mask = (u - pi / ind) > 0
+        rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
+        theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
+        w = np.maximum(v - theta, 0)
+        return w
+
+    def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
         
         W = self.W
         debugging = self.set_ground_truth
@@ -1288,23 +1349,26 @@ class LDMIBSS:
             S = self.S
             A = self.A
 
-        RX = (1/samples) * np.dot(X, X.T)
-        RXinv = np.linalg.pinv(RX)
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
         Y = np.zeros((self.s_dim, samples))
         # Y = np.random.rand(self.s_dim, samples)/2
-        Identity_like_Y = np.eye(self.s_dim)
         for k in range(n_iterations):
-            # RY = (1/samples) * np.dot(Y, Y.T) + epsilon * Identity_like_Y
-            # # muY = np.mean(Y, axis = 1).reshape(-1,1)
-            # E = Y - np.dot(W, X)
-            # RE = (1/samples) * np.dot(E, E.T) + epsilon * Identity_like_Y
-            # gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y) - np.dot(np.linalg.pinv(RE), E))
-            # Y = Y + (mu_start/np.sqrt(k+1)) * gradY
-            Y = self.update_Y(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
-            Y = self.ProjectOntoLInfty(Y)
-            RYX = (1/samples) * np.dot(Y, X.T)
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoLInfty(Y)
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoLInfty(Y)
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
             W = np.dot(RYX, RXinv)
-
 
             if debugging:
                 if (k % debug_iteration_point) == 0:
@@ -1324,7 +1388,218 @@ class LDMIBSS:
                         display(pl.gcf())   
         self.W = W
 
+    def fit_batch_nnantisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
         
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        for k in range(n_iterations):
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoNNLInfty(Y)
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoNNLInfty(Y)
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if (k % debug_iteration_point) == 0:
+                    self.W = W
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+        self.W = W
+        
+    def fit_batch_sparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        for k in range(n_iterations):
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectRowstoL1NormBall(Y.T).T
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectRowstoL1NormBall(Y.T).T
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if (k % debug_iteration_point) == 0:
+                    self.W = W
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+        self.W = W
+
+    def fit_batch_nnsparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        for k in range(n_iterations):
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectRowstoL1NormBall((Y * (Y>= 0)).T).T
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectRowstoL1NormBall((Y * (Y>= 0)).T).T
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if (k % debug_iteration_point) == 0:
+                    self.W = W
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+        self.W = W
+
+    def fit_batch_simplex(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            S = self.S
+            A = self.A
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        for k in range(n_iterations):
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectColstoSimplex(Y)
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectColstoSimplex(Y)
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if (k % debug_iteration_point) == 0:
+                    print("here")
+                    self.W = W
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+        self.W = W
 
 class OnlineNSM:
     """
@@ -2210,12 +2485,6 @@ def ZeroOneNormalizeColumns(X):
 
     return X_normalized
 
-def ProjectOntoLInfty(X, thresh = 1.0):
-    return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
-
-def ProjectOntoNNLInfty(X, thresh = 1.0):
-    return X*(X>=0)*(X<=thresh)+(X>thresh)*thresh
-
 def Subplot_gray_images(I, image_shape = [512,512], height = 15, width = 15, title = ''):
     n_images = I.shape[1]
     fig, ax = plt.subplots(1,n_images)
@@ -2289,6 +2558,12 @@ def snr(S_original, S_noisy):
     snr = 10 * np.log10(S_P / N_P)
     return snr
 
+def ProjectOntoLInfty(X, thresh = 1.0):
+    return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
+
+def ProjectOntoNNLInfty(X, thresh = 1.0):
+    return X*(X>=0)*(X<=thresh)+(X>thresh)*thresh
+
 def ProjectRowstoL1NormBall(H):
     Hshape=H.shape
     #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
@@ -2307,6 +2582,47 @@ def ProjectRowstoL1NormBall(H):
     H=np.sign(H)*(ww>0)*ww
     return H
 
+def ProjectColstoSimplex(v, z=1):
+    """v array of shape (n_features, n_samples)."""
+    p, n = v.shape
+    u = np.sort(v, axis=0)[::-1, ...]
+    pi = np.cumsum(u, axis=0) - z
+    ind = (np.arange(p) + 1).reshape(-1, 1)
+    mask = (u - pi / ind) > 0
+    rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
+    theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
+    w = np.maximum(v - theta, 0)
+    return w
+
+def projection_simplex(V, z=1, axis=None):
+    """
+    Projection of x onto the simplex, scaled by z:
+        P(x; z) = argmin_{y >= 0, sum(y) = z} ||y - x||^2
+    z: float or array
+        If array, len(z) must be compatible with V
+    axis: None or int
+        axis=None: project V by P(V.ravel(); z)
+        axis=1: project each V[i] by P(V[i]; z[i])
+        axis=0: project each V[:, j] by P(V[:, j]; z[j])
+    """
+    if axis == 1:
+        n_features = V.shape[1]
+        U = np.sort(V, axis=1)[:, ::-1]
+        z = np.ones(len(V)) * z
+        cssv = np.cumsum(U, axis=1) - z[:, np.newaxis]
+        ind = np.arange(n_features) + 1
+        cond = U - cssv / ind > 0
+        rho = np.count_nonzero(cond, axis=1)
+        theta = cssv[np.arange(len(V)), rho - 1] / rho
+        return np.maximum(V - theta[:, np.newaxis], 0)
+
+    elif axis == 0:
+        return projection_simplex(V.T, z, axis=1).T
+
+    else:
+        V = V.ravel().reshape(1, -1)
+        return projection_simplex(V, z, axis=1).ravel()
+       
 def display_matrix(array):
     data = ''
     for line in array:
