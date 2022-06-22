@@ -1230,7 +1230,7 @@ class LDMIBSS:
             
         self.s_dim = s_dim
         self.x_dim = x_dim
-        self.W = W
+        self.W = W # Trainable separator matrix, i.e., W@X \approx S
         ### Ground Truth Sources and Mixing Matrix For Debugging
         self.set_ground_truth = set_ground_truth
         self.S = S # Sources
@@ -1280,7 +1280,7 @@ class LDMIBSS:
 
     @staticmethod
     @njit
-    def update_Y_cov_based(Y, X, W, epsilon, step_size):
+    def update_Y_cov_based(Y, X, muX, W, epsilon, step_size):
         def mean_numba(a):
 
             res = []
@@ -1291,10 +1291,10 @@ class LDMIBSS:
         s_dim, samples = Y.shape[0], Y.shape[1]
         muY = mean_numba(Y).reshape(-1,1)
         Identity_like_Y = np.eye(s_dim)
-        RY = (1/samples) * (np.dot(Y, Y.T) - np.outer(muY, muY)) + epsilon * Identity_like_Y
-        E = Y - np.dot(W, X)
+        RY = (1/samples) * (np.dot(Y, Y.T) - np.dot(muY, muY.T)) + epsilon * Identity_like_Y
+        E = (Y - muY) - np.dot(W, (X - muX.reshape(-1,1)))
         muE = mean_numba(E).reshape(-1,1)
-        RE = (1/samples) * (np.dot(E, E.T) - np.outer(muE, muE)) + epsilon * Identity_like_Y
+        RE = (1/samples) * (np.dot(E, E.T) - np.dot(muE, muE.T)) + epsilon * Identity_like_Y
         gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y - muY) - np.dot(np.linalg.pinv(RE), E - muE))
         Y = Y + (step_size) * gradY
         return Y
@@ -1357,14 +1357,14 @@ class LDMIBSS:
             RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
             RXinv = np.linalg.pinv(RX)
         Y = np.zeros((self.s_dim, samples))
-        # Y = np.random.rand(self.s_dim, samples)/2
+        # Y = (2*np.random.rand(self.s_dim, samples) - 1)/15
         for k in range(n_iterations):
             if method == "correlation":
                 Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectOntoLInfty(Y)
                 RYX = (1/samples) * np.dot(Y, X.T)
             elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectOntoLInfty(Y)
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
@@ -1410,14 +1410,14 @@ class LDMIBSS:
             RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
             RXinv = np.linalg.pinv(RX)
         Y = np.zeros((self.s_dim, samples))
-        # Y = np.random.rand(self.s_dim, samples)/2
+        Y = np.random.rand(self.s_dim, samples)/2
         for k in range(n_iterations):
             if method == "correlation":
                 Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectOntoNNLInfty(Y)
                 RYX = (1/samples) * np.dot(Y, X.T)
             elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectOntoNNLInfty(Y)
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
@@ -1470,7 +1470,7 @@ class LDMIBSS:
                 Y = self.ProjectRowstoL1NormBall(Y.T).T
                 RYX = (1/samples) * np.dot(Y, X.T)
             elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectRowstoL1NormBall(Y.T).T
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
@@ -1523,7 +1523,7 @@ class LDMIBSS:
                 Y = self.ProjectRowstoL1NormBall((Y * (Y>= 0)).T).T
                 RYX = (1/samples) * np.dot(Y, X.T)
             elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectRowstoL1NormBall((Y * (Y>= 0)).T).T
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
@@ -1576,7 +1576,7 @@ class LDMIBSS:
                 Y = self.ProjectColstoSimplex(Y)
                 RYX = (1/samples) * np.dot(Y, X.T)
             elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectColstoSimplex(Y)
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
