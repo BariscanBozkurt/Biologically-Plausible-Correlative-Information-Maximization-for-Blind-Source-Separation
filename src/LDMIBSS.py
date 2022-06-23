@@ -9,6 +9,7 @@ Date: 17.02.2022
 """
 
 from random import sample
+from telnetlib import XAUTH
 import numpy as np
 import scipy
 from scipy.stats import invgamma, chi2, t
@@ -55,7 +56,7 @@ class OnlineLDMIBSS:
 
     """
     
-    def __init__(self, s_dim, x_dim, lambday = 0.999, lambdae = 1, muW = 1e-3, beta = 5, W = None, By = None, Be = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, S = None, A = None):
+    def __init__(self, s_dim, x_dim, lambday = 0.999, lambdae = 1, muW = 1e-3, epsilon = 1e-3, W = None, By = None, Be = None, neural_OUTPUT_COMP_TOL = 1e-6, set_ground_truth = False, S = None, A = None):
         if W is not None:
             assert W.shape == (s_dim, x_dim), "The shape of the initial guess W must be (s_dim, x_dim) = (%d,%d)" % (s_dim, x_dim)
             W = W
@@ -78,10 +79,10 @@ class OnlineLDMIBSS:
         self.x_dim = x_dim
         self.lambday = lambday
         self.lambdae = lambdae
-        self.beta = beta
         self.muW = muW
         self.gamy = (1-lambday) / lambday
         self.game = (1 - lambdae) / lambdae
+        self.epsilon = epsilon
         self.W = W
         self.By = By
         self.Be = Be
@@ -91,6 +92,7 @@ class OnlineLDMIBSS:
         self.S = S # Sources
         self.A = A # Mixing Matrix
         self.SIR_list = []
+        self.SINR_list = []
         self.SNR_list = []
 
     # Calculate SIR Function
@@ -112,53 +114,64 @@ class OnlineLDMIBSS:
 
         return SIRV,rankP
 
+    def CalculateSINR(self, Out,S):
+        r=S.shape[0]
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        indmax=np.argmax(np.abs(G),1)
+        GG=np.zeros((r,r))
+        for kk in range(r):
+            GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+        ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+        E=Out-ZZ
+        MSE=np.linalg.norm(E,'fro')**2
+        SigPow=np.linalg.norm(ZZ,'fro')**2
+        SINR=(SigPow/MSE)
+        return SINR,SigPow,MSE,G
+
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
     def compute_overall_mapping(self, return_mapping = False):
-        W, By, Be, gamy, game, beta = self.W, self.By, self.Be, self.gamy, self.game, self.beta
-        # Wf = np.linalg.pinv((gamy/beta) * By - np.eye(self.s_dim)) @ W
-        Wf = np.linalg.pinv(gamy * By - game * Be - beta * np.eye(self.s_dim)) @ (game * Be @ W + beta * W)
+        W, By, Be, gamy, game = self.W, self.By, self.Be, self.gamy, self.game
+        # Wf = np.linalg.pinv(gamy * By - game * Be - beta * np.eye(self.s_dim)) @ (game * Be @ W + beta * W)
+        Wf = np.linalg.pinv(gamy * By - game * Be) @ (game * Be @ W)
         if return_mapping:
             return Wf
         else:
             return None
 
-    def whiten_signal(self, X, mean_normalize = True, type_ = 3):
+    def outer_prod_broadcasting(self, A, B):
+        """Broadcasting trick"""
+        return A[...,None]*B[:,None]
+
+    def find_permutation_between_source_and_estimation(self, S, Y):
         """
-        Input : X  ---> Input signal to be whitened
-        type_ : Defines the type for preprocesing matrix. type_ = 1 and 2 uses eigenvalue decomposition whereas type_ = 3 uses SVD.
-        Output: X_white  ---> Whitened signal, i.e., X_white = W_pre @ X where W_pre = (R_x^0.5)^+ (square root of sample correlation matrix)
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+        
+        return the permutation of the source seperation algorithm
         """
-        if mean_normalize:
-            X = X - np.mean(X,axis = 0, keepdims = True)
+        # perm = np.argmax(np.abs(np.corrcoef(S.T,Y.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(np.corrcoef(Y.T,S.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(outer_prod_broadcasting(S,Y).sum(axis = 0)), axis = 0)
+        perm = np.argmax(np.abs(self.outer_prod_broadcasting(Y,S).sum(axis = 0))/(np.linalg.norm(S,axis = 0)*np.linalg.norm(Y,axis=0)), axis = 0)
+        return perm
 
-        cov = np.cov(X.T)
+    def signed_and_permutation_corrected_sources(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimation(S,Y)
+        return np.sign((Y[:,perm] * S).sum(axis = 0)) * Y[:,perm]
 
-        if type_ == 3: # Whitening using singular value decomposition
-            U,S,V = np.linalg.svd(cov)
-            d = np.diag(1.0 / np.sqrt(S))
-            W_pre = np.dot(U, np.dot(d, U.T))
-
-        else: # Whitening using eigenvalue decomposition
-            d,S = np.linalg.eigh(cov)
-            D = np.diag(d)
-
-            D_sqrt = np.sqrt(D * (D>0))
-
-            if type_ == 1: # Type defines how you want W_pre matrix to be
-                W_pre = np.linalg.pinv(S@D_sqrt)
-            elif type_ == 2:
-                W_pre = np.linalg.pinv(S@D_sqrt@S.T)
-
-        X_white = (W_pre @ X.T).T
-
-        return X_white, W_pre
-    
     def ProjectOntoLInfty(self, X):
         
         return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
     
     @staticmethod
     @njit
-    def run_neural_dynamics_antisparse(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_antisparse(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
 
@@ -168,7 +181,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e #+ beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
             y = ProjectOntoLInfty(y)
 
@@ -178,7 +191,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnantisparse(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnantisparse(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoNNLInfty(X, thresh = 1.0):
             return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh #-thresh*(X<-thresh)
 
@@ -188,7 +201,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
             y = ProjectOntoNNLInfty(y)
 
@@ -198,7 +211,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_mixedantisparse(x, y, nn_components, signed_components, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_mixedantisparse(x, y, nn_components, signed_components, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
         def ProjectOntoNNLInfty(X, thresh = 1.0):
@@ -210,7 +223,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
             y[signed_components] = ProjectOntoLInfty(y[signed_components])
             y[nn_components] = ProjectOntoNNLInfty(y[nn_components])
@@ -221,7 +234,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_sparse(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_sparse(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         
         STLAMBD = 0
         dval = 0
@@ -231,7 +244,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
 
             # SOFT THRESHOLDING
@@ -248,7 +261,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnsparse(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnsparse(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         
         STLAMBD = 0
         dval = 0
@@ -258,7 +271,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e 
             y = y + mu_y * (grady)
 
             y = np.maximum(y - STLAMBD, 0)
@@ -272,7 +285,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_simplex(x, y, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_simplex(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         
         STLAMBD = 0
         dval = 0
@@ -282,7 +295,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
 
             y = np.maximum(y - STLAMBD, 0)
@@ -296,7 +309,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnwsubsparse(x, y, nn_components, sparse_components, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnwsubsparse(x, y, nn_components, sparse_components, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
         def ProjectOntoNNLInfty(X, thresh = 1.0):
@@ -309,7 +322,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e 
             y = y + mu_y * (grady)
 
             y[nn_components] = ProjectOntoNNLInfty(y[nn_components])
@@ -328,7 +341,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_nnwsubnnsparse(x, y, nn_components, nnsparse_components, W, My, Be, beta, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
+    def run_neural_dynamics_nnwsubnnsparse(x, y, nn_components, nnsparse_components, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
 
         def ProjectOntoNNLInfty(X, thresh = 1.0):
             return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh 
@@ -341,7 +354,7 @@ class OnlineLDMIBSS:
             # mu_y = lr_start / (j + 1)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
 
             y[nn_components] = ProjectOntoNNLInfty(y[nn_components])
@@ -358,7 +371,7 @@ class OnlineLDMIBSS:
 
     @staticmethod
     @njit
-    def run_neural_dynamics_general_polytope(x, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, beta, gamy, game, lr_start = 0.9, 
+    def run_neural_dynamics_general_polytope(x, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, gamy, game, lr_start = 0.9, 
                                              lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
         def ProjectOntoLInfty(X, thresh = 1.0):
             return X*(X>=-thresh)*(X<=thresh)+(X>thresh)*thresh-thresh*(X<-thresh)
@@ -386,7 +399,7 @@ class OnlineLDMIBSS:
             mu_y = max(lr_start / (j + 1), lr_stop)
             y_old = y.copy()
             e = yke - y
-            grady = -y + gamy * My @ y + game * Be @ e + beta * e
+            grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
             if sparse_dims_list[0][0] != -1:
                 for ss,sparse_dim in enumerate(sparse_dims_list):
@@ -406,9 +419,9 @@ class OnlineLDMIBSS:
                 break
         return y
 
-    def fit_batch_general_polytope(self, X, signed_dims, nn_dims, sparse_dims_list, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_general_polytope(self, X, signed_dims, nn_dims, sparse_dims_list, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-15, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -420,8 +433,11 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -431,14 +447,6 @@ class OnlineLDMIBSS:
             idx = np.random.permutation(samples) # random permutation
         else:
             idx = np.arange(samples)
-            
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
         
         if (signed_dims.size == 0):
             signed_dims = np.array([-1])
@@ -450,53 +458,76 @@ class OnlineLDMIBSS:
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
 
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_general_polytope(  x_current, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, beta, gamy, game, 
-                                                                lr_start = neural_lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                y = self.run_neural_dynamics_general_polytope(  x_current, y, signed_dims, nn_dims, sparse_dims_list, W, My, Be, gamy, game, 
+                                                                lr_start = neural_lr_start, lr_stop = neural_lr_stop,
+                                                                neural_dynamic_iterations = neural_dynamic_iterations, 
                                                                 neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = W + muW * beta * np.outer(e, x_current)
+                W = W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
-                ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.outer(ee, ee))
+                # ee = np.dot(Be,e)
+                # Be = 1 / lambdae * (Be - game * np.outer(ee, ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
-                            display(pl.gcf())   
+                            display(pl.gcf())  
         self.W = W
         self.By = By
         self.Be = Be
         
     def fit_next_antisparse(self,x_current, neural_dynamic_iterations = 250, lr_start = 0.9):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         h = 1 / gamy # Hopefield parameter
 
@@ -505,13 +536,13 @@ class OnlineLDMIBSS:
         # Output recurrent weights
         My = By + h * np.eye(self.s_dim)
         
-        y = self.run_neural_dynamics_antisparse(x_current, y, W, My, Be, beta, gamy, game, 
+        y = self.run_neural_dynamics_antisparse(x_current, y, W, My, Be, gamy, game, 
                                                 lr_start = lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
                                                 neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
         
         e = y - W @ x_current
 
-        W = W + muW * beta * np.outer(e, x_current)
+        W = W + muW * np.outer(e, x_current)
 
         By = (1/lambday) * (By - gamy * np.outer(By @ y, By @ y))        
         
@@ -522,9 +553,9 @@ class OnlineLDMIBSS:
         self.By = By
         self.Be = self.Be
         
-    def fit_batch_antisparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_antisparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-15, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -536,8 +567,11 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -548,30 +582,22 @@ class OnlineLDMIBSS:
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
 
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_antisparse(x_current, y, W, My, Be, beta, gamy, game, 
-                                                        lr_start = neural_lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                y = self.run_neural_dynamics_antisparse(x_current, y, W, My, Be, gamy, game, 
+                                                        lr_start = neural_lr_start, lr_stop = neural_lr_stop,
+                                                        neural_dynamic_iterations = neural_dynamic_iterations, 
                                                         neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = W + muW * beta * np.outer(e, x_current)
+                W = W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -583,31 +609,53 @@ class OnlineLDMIBSS:
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)) & (i_sample >= debug_iteration_point):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
                             display(pl.gcf())   
         self.W = W
         self.By = By
         self.Be = Be
         
-    def fit_batch_nnantisparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnantisparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -619,9 +667,11 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
-
+            plt.figure(figsize = (25, 10), dpi = 80)
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
         
@@ -631,30 +681,21 @@ class OnlineLDMIBSS:
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_nnantisparse(x_current, y, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_nnantisparse(x_current, y, W, My, Be, gamy, game, 
                                                              neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                              neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -665,31 +706,53 @@ class OnlineLDMIBSS:
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)) & (i_sample >= debug_iteration_point):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
                             display(pl.gcf())   
         self.W = W
         self.By = By
         self.Be = Be
 
-    def fit_batch_mixedantisparse(self, X, nn_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_mixedantisparse(self, X, nn_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -719,30 +782,22 @@ class OnlineLDMIBSS:
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
 
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_mixedantisparse(x_current, y, nn_components, signed_components, W, My, Be, beta, gamy, game, 
-                                                             lr_start = neural_lr_start, neural_dynamic_iterations = neural_dynamic_iterations, 
+                y = self.run_neural_dynamics_mixedantisparse(x_current, y, nn_components, signed_components, W, My, Be, gamy, game, 
+                                                             lr_start = neural_lr_start, lr_stop = neural_lr_stop, 
+                                                             neural_dynamic_iterations = neural_dynamic_iterations, 
                                                              neural_OUTPUT_COMP_TOL = neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = W + muW * beta * np.outer(e, x_current)
+                W = W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -775,9 +830,9 @@ class OnlineLDMIBSS:
         self.By = By
         self.Be = Be
        
-    def fit_batch_sparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_sparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -789,8 +844,11 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -801,30 +859,21 @@ class OnlineLDMIBSS:
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_sparse(x_current, y, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_sparse(x_current, y, W, My, Be, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -835,31 +884,53 @@ class OnlineLDMIBSS:
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
-                            display(pl.gcf())   
+                            display(pl.gcf())  
         self.W = W
         self.By = By
         self.Be = Be
 
-    def fit_batch_nnsparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnsparse(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -871,8 +942,11 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -882,31 +956,22 @@ class OnlineLDMIBSS:
             idx = np.random.permutation(samples) # random permutation
         else:
             idx = np.arange(samples)
-            
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
+
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_nnsparse(x_current, y, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_nnsparse(x_current, y, W, My, Be, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -917,31 +982,53 @@ class OnlineLDMIBSS:
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
                             display(pl.gcf())   
         self.W = W
         self.By = By
         self.Be = Be
 
-    def fit_batch_simplex(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_simplex(self, X, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -953,42 +1040,35 @@ class OnlineLDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
-        
         
         if shuffle:
             idx = np.random.permutation(samples) # random permutation
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_simplex(x_current, y, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_simplex(x_current, y, W, My, Be, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -1000,31 +1080,53 @@ class OnlineLDMIBSS:
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
-                    if (i_sample % debug_iteration_point) == 0:
+                    if (((i_sample % debug_iteration_point) == 0) | (i_sample == samples - 1)) & (i_sample > debug_iteration_point):
                         self.W = W
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = Wf @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.arange(2,len(self.SINR_list)+2), np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.arange(2,len(self.SINR_list)+2), np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.arange(2,len(self.SINR_list)+2), np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
-                            display(pl.gcf())   
+                            display(pl.gcf())  
         self.W = W
         self.By = By
         self.Be = Be
 
-    def fit_batch_nnwsubsparse(self, X, sparse_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnwsubsparse(self, X, sparse_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -1053,38 +1155,29 @@ class OnlineLDMIBSS:
             idx = np.random.permutation(samples) # random permutation
         else:
             idx = np.arange(samples)
-            
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
+
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_nnwsubsparse(x_current, y, nn_components, sparse_components, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_nnwsubsparse(x_current, y, nn_components, sparse_components, W, My, Be, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
-                ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
-                # Record the seperated signal
+                # ee = np.dot(Be,e)
+                # Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
+                # # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
                 if debugging:
@@ -1110,9 +1203,9 @@ class OnlineLDMIBSS:
         self.By = By
         self.Be = Be
 
-    def fit_batch_nnwsubnnsparse(self, X, nnsparse_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
+    def fit_batch_nnwsubnnsparse(self, X, nnsparse_components, n_epochs = 1, neural_dynamic_iterations = 250, neural_lr_start = 0.9, neural_lr_stop = 1e-3, shuffle = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         
-        lambday, lambdae, beta, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.beta, self.muW, self.gamy, self.game, self.W, self.By, self.Be
+        lambday, lambdae, muW, gamy, game, W, By, Be = self.lambday, self.lambdae, self.muW, self.gamy, self.game, self.W, self.By, self.Be
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
 
@@ -1142,36 +1235,27 @@ class OnlineLDMIBSS:
         else:
             idx = np.arange(samples)
             
-        if whiten:
-            X_white, W_pre = self.whiten_signal(X.T, type_ = whiten_type)
-            X_white = X_white.T
-            A = W_pre @ A
-            self.A = A
-        else:
-            X_white = X 
-            
-            
         for k in range(n_epochs):
 
             for i_sample in tqdm(range(samples)):
-                x_current = X_white[:,idx[i_sample]]
+                x_current = X[:,idx[i_sample]]
                 y = np.zeros(self.s_dim)
                 # y = np.random.uniform(0,1, size = (self.s_dim,))
                 # Output recurrent weights
                 My = By + h * np.eye(self.s_dim)
-                y = self.run_neural_dynamics_nnwsubnnsparse(x_current, y, nn_components, nnsparse_components, W, My, Be, beta, gamy, game, 
+                y = self.run_neural_dynamics_nnwsubnnsparse(x_current, y, nn_components, nnsparse_components, W, My, Be, gamy, game, 
                                                     neural_lr_start, neural_lr_stop, neural_dynamic_iterations, 
                                                     neural_dynamic_tol)
                         
                 e = y - W @ x_current
 
-                W = (1 - 1e-6) * W + muW * beta * np.outer(e, x_current)
+                W = (1 - 1e-6) * W + muW * np.outer(e, x_current)
                 
                 z = By @ y
                 By = (1/lambday) * (By - gamy * np.outer(z, z))
 
-                ee = np.dot(Be,e)
-                Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
+                # ee = np.dot(Be,e)
+                # Be = 1 / lambdae * (Be - game * np.outer(ee,ee))
                 # Record the seperated signal
                 Y[:,idx[i_sample]] = y
 
