@@ -1501,7 +1501,7 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
                     self.W = W
                     Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                     coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
@@ -1577,7 +1577,7 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
                     self.W = W
                     Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                     coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
@@ -1652,7 +1652,7 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
                     self.W = W
                     Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                     coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
@@ -1728,7 +1728,7 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
                     self.W = W
                     Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                     coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
@@ -1804,7 +1804,7 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
                     self.W = W
                     Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                     coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
