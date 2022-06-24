@@ -1320,6 +1320,7 @@ class LDMIBSS:
         self.S = S # Sources
         self.A = A # Mixing Matrix
         self.SIR_list = []
+        self.SINR_list = []
         self.SNR_list = []
 
     # Calculate SIR Function
@@ -1340,6 +1341,48 @@ class LDMIBSS:
             SIRV = 10*np.log10(sigpow/intpow)
 
         return SIRV,rankP
+
+    def CalculateSINR(self, Out,S):
+        r=S.shape[0]
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        indmax=np.argmax(np.abs(G),1)
+        GG=np.zeros((r,r))
+        for kk in range(r):
+            GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+        ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+        E=Out-ZZ
+        MSE=np.linalg.norm(E,'fro')**2
+        SigPow=np.linalg.norm(ZZ,'fro')**2
+        SINR=(SigPow/MSE)
+        return SINR,SigPow,MSE,G
+
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
+    def outer_prod_broadcasting(self, A, B):
+        """Broadcasting trick"""
+        return A[...,None]*B[:,None]
+
+    def find_permutation_between_source_and_estimation(self, S, Y):
+        """
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+        
+        return the permutation of the source seperation algorithm
+        """
+        # perm = np.argmax(np.abs(np.corrcoef(S.T,Y.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(np.corrcoef(Y.T,S.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(outer_prod_broadcasting(S,Y).sum(axis = 0)), axis = 0)
+        perm = np.argmax(np.abs(self.outer_prod_broadcasting(Y,S).sum(axis = 0))/(np.linalg.norm(S,axis = 0)*np.linalg.norm(Y,axis=0)), axis = 0)
+        return perm
+
+    def signed_and_permutation_corrected_sources(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimation(S,Y)
+        return np.sign((Y[:,perm] * S).sum(axis = 0)) * Y[:,perm]
 
     @staticmethod
     @njit
@@ -1430,8 +1473,11 @@ class LDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         if method == "correlation":
             RX = (1/samples) * np.dot(X, X.T)
@@ -1441,7 +1487,7 @@ class LDMIBSS:
             RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
             RXinv = np.linalg.pinv(RX)
         Y = np.zeros((self.s_dim, samples))
-        # Y = (2*np.random.rand(self.s_dim, samples) - 1)/15
+        # Y = (np.random.rand(self.s_dim, samples) - 0.5)/2
         for k in range(n_iterations):
             if method == "correlation":
                 Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
@@ -1455,21 +1501,41 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if (k % debug_iteration_point) == 0:
+                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
                     self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
                     SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
                     SIRlist.append(SIR)
                     self.SIR_list = SIRlist
-
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
                     if plot_in_jupyter:
                         pl.clf()
-                        pl.plot(np.array(SIRlist), linewidth = 3)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                        pl.ylabel("SIR (dB)", fontsize = 15)
-                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
                         pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
                         clear_output(wait=True)
-                        display(pl.gcf())   
+                        display(pl.gcf())  
         self.W = W
 
     def fit_batch_nnantisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
@@ -1483,8 +1549,11 @@ class LDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         if method == "correlation":
             RX = (1/samples) * np.dot(X, X.T)
@@ -1508,22 +1577,41 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if (k % debug_iteration_point) == 0:
+                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
                     self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
                     SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
                     SIRlist.append(SIR)
                     self.SIR_list = SIRlist
-
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
                     if plot_in_jupyter:
                         pl.clf()
-                        pl.plot(np.array(SIRlist), linewidth = 3)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                        pl.ylabel("SIR (dB)", fontsize = 15)
-                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
                         pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
                         clear_output(wait=True)
-                        display(pl.gcf())   
-        self.W = W
+                        display(pl.gcf())  
         
     def fit_batch_sparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
         
@@ -1536,8 +1624,11 @@ class LDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         if method == "correlation":
             RX = (1/samples) * np.dot(X, X.T)
@@ -1561,21 +1652,41 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if (k % debug_iteration_point) == 0:
+                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
                     self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
                     SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
                     SIRlist.append(SIR)
                     self.SIR_list = SIRlist
-
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
                     if plot_in_jupyter:
                         pl.clf()
-                        pl.plot(np.array(SIRlist), linewidth = 3)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                        pl.ylabel("SIR (dB)", fontsize = 15)
-                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
                         pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
                         clear_output(wait=True)
-                        display(pl.gcf())   
+                        display(pl.gcf())  
         self.W = W
 
     def fit_batch_nnsparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
@@ -1589,8 +1700,11 @@ class LDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         if method == "correlation":
             RX = (1/samples) * np.dot(X, X.T)
@@ -1614,19 +1728,39 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if (k % debug_iteration_point) == 0:
+                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
                     self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
                     SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
                     SIRlist.append(SIR)
                     self.SIR_list = SIRlist
-
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
                     if plot_in_jupyter:
                         pl.clf()
-                        pl.plot(np.array(SIRlist), linewidth = 3)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                        pl.ylabel("SIR (dB)", fontsize = 15)
-                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
                         pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
                         clear_output(wait=True)
                         display(pl.gcf())   
         self.W = W
@@ -1642,8 +1776,11 @@ class LDMIBSS:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         if method == "correlation":
             RX = (1/samples) * np.dot(X, X.T)
@@ -1667,20 +1804,39 @@ class LDMIBSS:
             W = np.dot(RYX, RXinv)
 
             if debugging:
-                if (k % debug_iteration_point) == 0:
-                    print("here")
+                if ((k % debug_iteration_point) == 0)  | (k == samples - 1):
                     self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
                     SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
                     SIRlist.append(SIR)
                     self.SIR_list = SIRlist
-
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
                     if plot_in_jupyter:
                         pl.clf()
-                        pl.plot(np.array(SIRlist), linewidth = 3)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                        pl.ylabel("SIR (dB)", fontsize = 15)
-                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
                         pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
                         clear_output(wait=True)
                         display(pl.gcf())   
         self.W = W
@@ -2833,6 +2989,32 @@ def merge_sort(list_):
 # def ProjectVectortoL1NormBall(H):
 #     Hshape = H.shape
 #     lr = np.repeat(np.reshape((1/np.linspace(1, H.shape[1], H.shape[1]))))
+
+def addWGN(signal, SNR, return_noise = False, print_resulting_SNR = False):
+    """
+    Adding white Gaussian Noise to the input signal
+    signal              : Input signal, numpy array of shape (number of sources, number of samples)
+                          If your signal is a 1D numpy array of shape (number of samples, ), then reshape it 
+                          by signal.reshape(1,-1) before giving it as input to this function
+    SNR                 : Desired input signal to noise ratio
+    print_resulting_SNR : If you want to print the numerically calculated SNR, pass it as True
+    
+    Returns
+    ============================
+    signal_noisy        : Output signal which is the sum of input signal and additive noise
+    noise               : Returns the added noise
+    """
+    sigpow = np.mean(signal**2, axis = 1)
+    noisepow = 10 **(-SNR/10) * sigpow
+    noise =  np.sqrt(noisepow)[:,np.newaxis] * np.random.randn(signal.shape[0], signal.shape[1])
+    signal_noisy = signal + noise
+    if print_resulting_SNR:
+        SNRinp = 10 * np.log10(np.sum(np.mean(signal**2, axis = 1)) / np.sum(np.mean(noise**2, axis = 1)))
+        print("Input SNR is : {}".format(SNRinp))
+    if return_noise:
+        return signal_noisy, noise
+    else:
+        return signal_noisy
 
 def generate_correlated_uniform_sources(R, range_ = [-1,1], n_sources = 5, size_sources = 500000):
     """
