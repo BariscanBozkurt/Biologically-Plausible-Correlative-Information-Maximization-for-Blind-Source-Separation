@@ -301,7 +301,7 @@ class OnlineLDMIBSS:
             y = np.maximum(y - STLAMBD, 0)
 
             dval = np.sum(y) - 1
-            STLAMBD = STLAMBD + .1 * dval
+            STLAMBD = STLAMBD + 0.05 * dval
 
             if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
                 break
