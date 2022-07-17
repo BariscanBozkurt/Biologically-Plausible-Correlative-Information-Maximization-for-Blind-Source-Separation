@@ -1426,10 +1426,14 @@ class LDMIBSS:
         Y = Y + (step_size) * gradY
         return Y
 
-    def ProjectOntoLInfty(self, X):
+    @staticmethod
+    @njit
+    def ProjectOntoLInfty(X):
         return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
     
-    def ProjectOntoNNLInfty(self, X):
+    @staticmethod
+    @njit
+    def ProjectOntoNNLInfty(X):
         return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
         
     def ProjectRowstoL1NormBall(self, H):
@@ -1564,7 +1568,7 @@ class LDMIBSS:
             RXinv = np.linalg.pinv(RX)
         Y = np.zeros((self.s_dim, samples))
         Y = np.random.rand(self.s_dim, samples)/2
-        for k in range(n_iterations):
+        for k in tqdm(range(n_iterations)):
             if method == "correlation":
                 Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectOntoNNLInfty(Y)
@@ -1840,6 +1844,618 @@ class LDMIBSS:
                         clear_output(wait=True)
                         display(pl.gcf())   
         self.W = W
+
+class BatchLDMIBSS:
+
+    """
+    Implementation of batch Log-Det Mutual Information Based Blind Source Separation Framework
+
+    ALMOST THE SAME IMPLEMENTATION WITH THE ABOVE LDMIBSS CLASS. THE ONLY DIFFERENCE IS THAT 
+    THIS ALGORITHM UPDATES ARE PERFORMED BASED ON THE MINIBATCHES. THE ABOVE LDMIBSS CLASS IS 
+    WORKING SLOW WHEN THE NUMBER OF DATA IS BIG (FOR EXAMPLE THE MIXTURE SIZE IS (Nmixtures, Nsamples) = (10, 500000)).
+    THEREFORE, IN EACH ITERATION, WE TAKE A MINIBATCH OF MIXTURES TO RUN THE ALGORITHM. IN THE DEBUGGING
+    PART FOR SNR ANS SINR CALCULATION, THE WHOLE DATA IS USED (NOT THE MINIBATCHES).
+
+    Parameters:
+    =================================
+    s_dim          -- Dimension of the sources
+    x_dim          -- Dimension of the mixtures
+    W              -- Feedforward Synapses
+    By             -- Inverse Output Covariance
+    Be             -- Inverse Error Covariance
+    lambday        -- Ry forgetting factor
+    lambdae        -- Re forgetting factor
+
+    
+    Methods:
+    ==================================
+    run_neural_dynamics_antisparse
+    fit_batch_antisparse
+    fit_batch_nnantisparse
+
+    """
+    
+    def __init__(self, s_dim, x_dim, W = None, set_ground_truth = False, S = None, A = None):
+        if W is not None:
+            assert W.shape == (s_dim, x_dim), "The shape of the initial guess W must be (s_dim, x_dim) = (%d,%d)" % (s_dim, x_dim)
+            W = W
+        else:
+            W = np.random.randn(s_dim, x_dim)
+            
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.W = W # Trainable separator matrix, i.e., W@X \approx S
+        ### Ground Truth Sources and Mixing Matrix For Debugging
+        self.set_ground_truth = set_ground_truth
+        self.S = S # Sources
+        self.A = A # Mixing Matrix
+        self.SIR_list = []
+        self.SINR_list = []
+        self.SNR_list = []
+
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+
+    def CalculateSINR(self, Out,S):
+        r=S.shape[0]
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        indmax=np.argmax(np.abs(G),1)
+        # indmax = np.mod(find_permutation_between_source_and_estimation(Out.T, S.T),r)
+        GG=np.zeros((r,r))
+        for kk in range(r):
+            GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+        ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+        E=Out-ZZ
+        MSE=np.linalg.norm(E,'fro')**2
+        SigPow=np.linalg.norm(ZZ,'fro')**2
+        SINR=(SigPow/MSE)
+        return SINR,SigPow,MSE,G
+
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
+    def outer_prod_broadcasting(self, A, B):
+        """Broadcasting trick"""
+        return A[...,None]*B[:,None]
+
+    def find_permutation_between_source_and_estimation(self, S, Y):
+        """
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+        
+        return the permutation of the source seperation algorithm
+        """
+        # perm = np.argmax(np.abs(np.corrcoef(S.T,Y.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(np.corrcoef(Y.T,S.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(outer_prod_broadcasting(S,Y).sum(axis = 0)), axis = 0)
+        perm = np.argmax(np.abs(self.outer_prod_broadcasting(Y,S).sum(axis = 0))/(np.linalg.norm(S,axis = 0)*np.linalg.norm(Y,axis=0)), axis = 0)
+        return perm
+
+    def signed_and_permutation_corrected_sources(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimation(S,Y)
+        return np.sign((Y[:,perm] * S).sum(axis = 0)) * Y[:,perm]
+
+    @staticmethod
+    @njit
+    def update_Y_corr_based(Y, X, W, epsilon, step_size):
+        s_dim, samples = Y.shape[0], Y.shape[1]
+        Identity_like_Y = np.eye(s_dim)
+        RY = (1/samples) * np.dot(Y, Y.T) + epsilon * Identity_like_Y
+        E = Y - np.dot(W, X)
+        RE = (1/samples) * np.dot(E, E.T) + epsilon * Identity_like_Y
+        gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y) - np.dot(np.linalg.pinv(RE), E))
+        Y = Y + (step_size) * gradY
+        return Y
+
+    # @njit(parallel=True)
+    # def mean_numba(a):
+
+    #     res = []
+    #     for i in range(a.shape[0]):
+    #         res.append(a[i, :].mean())
+
+    #     return np.array(res)
+
+    @staticmethod
+    @njit
+    def update_Y_cov_based(Y, X, muX, W, epsilon, step_size):
+        def mean_numba(a):
+
+            res = []
+            for i in range(a.shape[0]):
+                res.append(a[i, :].mean())
+
+            return np.array(res)
+        s_dim, samples = Y.shape[0], Y.shape[1]
+        muY = mean_numba(Y).reshape(-1,1)
+        Identity_like_Y = np.eye(s_dim)
+        RY = (1/samples) * (np.dot(Y, Y.T) - np.dot(muY, muY.T)) + epsilon * Identity_like_Y
+        E = (Y - muY) - np.dot(W, (X - muX.reshape(-1,1)))
+        muE = mean_numba(E).reshape(-1,1)
+        RE = (1/samples) * (np.dot(E, E.T) - np.dot(muE, muE.T)) + epsilon * Identity_like_Y
+        gradY = (1/samples) * (np.dot(np.linalg.pinv(RY), Y - muY) - np.dot(np.linalg.pinv(RE), E - muE))
+        Y = Y + (step_size) * gradY
+        return Y
+
+    def ProjectOntoLInfty(self, X):
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+    def ProjectOntoNNLInfty(self, X):
+        return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
+        
+    def ProjectRowstoL1NormBall(self, H):
+        Hshape=H.shape
+        #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
+        lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
+        #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
+
+        u=-np.sort(-np.abs(H),axis=1)
+        sv=np.cumsum(u,axis=1)
+        q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
+        rho=np.max(q,axis=1)
+        rho=rho.astype(int)
+        lindex=np.linspace(1,Hshape[0],Hshape[0])-1
+        lindex=lindex.astype(int)
+        theta=np.maximum(0,np.reshape((sv[tuple([lindex,rho])]-1)/(rho+1),(Hshape[0],1)))
+        ww=np.abs(H)-theta
+        H=np.sign(H)*(ww>0)*ww
+        return H
+
+    def ProjectColstoSimplex(self, v, z=1):
+        """v array of shape (n_features, n_samples)."""
+        p, n = v.shape
+        u = np.sort(v, axis=0)[::-1, ...]
+        pi = np.cumsum(u, axis=0) - z
+        ind = (np.arange(p) + 1).reshape(-1, 1)
+        mask = (u - pi / ind) > 0
+        rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
+        theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
+        w = np.maximum(v - theta, 0)
+        return w
+
+    def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            S = self.S
+            A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = (np.random.rand(self.s_dim, samples) - 0.5)/2
+        for k in range(n_iterations):
+            if method == "correlation":
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoLInfty(Y)
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.ProjectOntoLInfty(Y)
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
+                    self.W = W
+                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                    Y_ = coef_ * Y_
+                    SIR = self.CalculateSIR(A, W)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,Y_))
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
+                        pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        clear_output(wait=True)
+                        display(pl.gcf())  
+        self.W = W
+
+    def fit_batch_nnantisparse(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            S = self.S
+            A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
+        total_iteration = 1
+        if drop_last_batch:
+            m = (X.shape[1])//batch_size
+        else:
+            m = int(np.ceil((X.shape[1])/batch_size))
+        for epoch_ in range(n_epochs):
+            for kk in (range(m)):
+                Xbatch = X[:,kk*batch_size:(kk+1)*batch_size]
+                sample_batch_size = Xbatch.shape[1]
+                if kk == 0:
+                    Ybatch = np.random.rand(self.s_dim, Xbatch.shape[1])/2
+                else:
+                    Ybatch = self.W @ Xbatch
+                if method == "correlation":
+                    RX = (1/sample_batch_size) * np.dot(Xbatch, Xbatch.T)
+                    RXinv = np.linalg.pinv(RX)
+                elif method == "covariance":
+                    muX = np.mean(Xbatch, axis = 1)
+                    RX = (1/sample_batch_size) * (np.dot(Xbatch, Xbatch.T) - np.outer(muX, muX))
+                    RXinv = np.linalg.pinv(RX)
+
+                for k in tqdm(range(n_iterations_per_batch)):
+                    if method == "correlation":
+                        Ybatch = self.update_Y_corr_based(Ybatch, Xbatch, W, epsilon, (mu_start/np.sqrt((k+1)*kk+1)))
+                        Ybatch = self.ProjectOntoNNLInfty(Ybatch)
+                        RYX = (1/sample_batch_size) * np.dot(Ybatch, Xbatch.T)
+                    elif method == "covariance":
+                        Ybatch = self.update_Y_cov_based(Ybatch, Xbatch, muX, W, epsilon, (mu_start/np.sqrt(total_iteration+1)))
+                        Ybatch = self.ProjectOntoNNLInfty(Ybatch)
+                        muY = np.mean(Ybatch, axis = 1)
+                        RYX = (1/sample_batch_size) * (np.dot(Ybatch, Xbatch.T) - np.outer(muY, muX))
+                    W = np.dot(RYX, RXinv)
+                    self.W = W
+                    total_iteration += 1
+                    if debugging:
+                        if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                            Y = W @ X
+                            Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                            coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                            Y_ = coef_ * Y_
+                            SIR = self.CalculateSIR(A, W)[0]
+                            SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                            SINRlist.append(SINR)
+                            SNRlist.append(self.snr(S.T,Y_))
+                            SIRlist.append(SIR)
+                            self.SIR_list = SIRlist
+                            self.SINR_list = SINRlist
+                            self.SNR_list = SNRlist
+                            if plot_in_jupyter:
+                                pl.clf()
+                                pl.subplot(1,2,1)
+                                pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                                pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.ylabel("SINR (dB)", fontsize = 35)
+                                pl.title("SINR Behaviour", fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                pl.legend(fontsize=25)
+                                pl.grid()
+                                pl.subplot(1,2,2)
+                                pl.plot(np.array(SNRlist), linewidth = 3)
+                                pl.grid()
+                                pl.title("Component SNR Check", fontsize = 35)
+                                pl.ylabel("SNR (dB)", fontsize = 35)
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                clear_output(wait=True)
+                                display(pl.gcf())  
+        
+    def fit_batch_sparse(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            S = self.S
+            A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
+        total_iteration = 1
+        if drop_last_batch:
+            m = (X.shape[1])//batch_size
+        else:
+            m = int(np.ceil((X.shape[1])/batch_size))
+        for epoch_ in range(n_epochs):
+            for kk in (range(m)):
+                Xbatch = X[:,kk*batch_size:(kk+1)*batch_size]
+                sample_batch_size = Xbatch.shape[1]
+                if kk == 0:
+                    Ybatch = np.zeros((self.s_dim, Xbatch.shape[1]))
+                else:
+                    Ybatch = self.W @ Xbatch
+                if method == "correlation":
+                    RX = (1/sample_batch_size) * np.dot(Xbatch, Xbatch.T)
+                    RXinv = np.linalg.pinv(RX)
+                elif method == "covariance":
+                    muX = np.mean(Xbatch, axis = 1)
+                    RX = (1/sample_batch_size) * (np.dot(Xbatch, Xbatch.T) - np.outer(muX, muX))
+                    RXinv = np.linalg.pinv(RX)
+
+                for k in tqdm(range(n_iterations_per_batch)):
+                    if method == "correlation":
+                        Ybatch = self.update_Y_corr_based(Ybatch, Xbatch, W, epsilon, (mu_start/np.sqrt((k+1)*kk+1)))
+                        Ybatch = self.ProjectRowstoL1NormBall(Ybatch.T).T
+                        RYX = (1/sample_batch_size) * np.dot(Ybatch, Xbatch.T)
+                    elif method == "covariance":
+                        Ybatch = self.update_Y_cov_based(Ybatch, Xbatch, muX, W, epsilon, (mu_start/np.sqrt(total_iteration+1)))
+                        Ybatch = self.ProjectRowstoL1NormBall(Ybatch.T).T
+                        muY = np.mean(Ybatch, axis = 1)
+                        RYX = (1/sample_batch_size) * (np.dot(Ybatch, Xbatch.T) - np.outer(muY, muX))
+                    W = np.dot(RYX, RXinv)
+                    self.W = W
+                    total_iteration += 1
+                    if debugging:
+                        if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                            Y = W @ X
+                            Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                            coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                            Y_ = coef_ * Y_
+                            SIR = self.CalculateSIR(A, W)[0]
+                            SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                            SINRlist.append(SINR)
+                            SNRlist.append(self.snr(S.T,Y_))
+                            SIRlist.append(SIR)
+                            self.SIR_list = SIRlist
+                            self.SINR_list = SINRlist
+                            self.SNR_list = SNRlist
+                            if plot_in_jupyter:
+                                pl.clf()
+                                pl.subplot(1,2,1)
+                                pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                                pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.ylabel("SINR (dB)", fontsize = 35)
+                                pl.title("SINR Behaviour", fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                pl.legend(fontsize=25)
+                                pl.grid()
+                                pl.subplot(1,2,2)
+                                pl.plot(np.array(SNRlist), linewidth = 3)
+                                pl.grid()
+                                pl.title("Component SNR Check", fontsize = 35)
+                                pl.ylabel("SNR (dB)", fontsize = 35)
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                clear_output(wait=True)
+                                display(pl.gcf())  
+
+    def fit_batch_nnsparse(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            S = self.S
+            A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
+        total_iteration = 1
+        if drop_last_batch:
+            m = (X.shape[1])//batch_size
+        else:
+            m = int(np.ceil((X.shape[1])/batch_size))
+        for epoch_ in range(n_epochs):
+            for kk in (range(m)):
+                Xbatch = X[:,kk*batch_size:(kk+1)*batch_size]
+                sample_batch_size = Xbatch.shape[1]
+                if kk == 0:
+                    Ybatch = np.zeros((self.s_dim, Xbatch.shape[1]))
+                else:
+                    Ybatch = self.W @ Xbatch
+                if method == "correlation":
+                    RX = (1/sample_batch_size) * np.dot(Xbatch, Xbatch.T)
+                    RXinv = np.linalg.pinv(RX)
+                elif method == "covariance":
+                    muX = np.mean(Xbatch, axis = 1)
+                    RX = (1/sample_batch_size) * (np.dot(Xbatch, Xbatch.T) - np.outer(muX, muX))
+                    RXinv = np.linalg.pinv(RX)
+
+                for k in tqdm(range(n_iterations_per_batch)):
+                    if method == "correlation":
+                        Ybatch = self.update_Y_corr_based(Ybatch, Xbatch, W, epsilon, (mu_start/np.sqrt((k+1)*kk+1)))
+                        Ybatch = self.ProjectRowstoL1NormBall((Ybatch * (Ybatch >= 0)).T).T
+                        RYX = (1/sample_batch_size) * np.dot(Ybatch, Xbatch.T)
+                    elif method == "covariance":
+                        Ybatch = self.update_Y_cov_based(Ybatch, Xbatch, muX, W, epsilon, (mu_start/np.sqrt(total_iteration+1)))
+                        Ybatch = self.ProjectRowstoL1NormBall((Ybatch * (Ybatch >= 0)).T).T
+                        muY = np.mean(Ybatch, axis = 1)
+                        RYX = (1/sample_batch_size) * (np.dot(Ybatch, Xbatch.T) - np.outer(muY, muX))
+                    W = np.dot(RYX, RXinv)
+                    self.W = W
+                    total_iteration += 1
+                    if debugging:
+                        if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                            Y = W @ X
+                            Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                            coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                            Y_ = coef_ * Y_
+                            SIR = self.CalculateSIR(A, W)[0]
+                            SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                            SINRlist.append(SINR)
+                            SNRlist.append(self.snr(S.T,Y_))
+                            SIRlist.append(SIR)
+                            self.SIR_list = SIRlist
+                            self.SINR_list = SINRlist
+                            self.SNR_list = SNRlist
+                            if plot_in_jupyter:
+                                pl.clf()
+                                pl.subplot(1,2,1)
+                                pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                                pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.ylabel("SINR (dB)", fontsize = 35)
+                                pl.title("SINR Behaviour", fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                pl.legend(fontsize=25)
+                                pl.grid()
+                                pl.subplot(1,2,2)
+                                pl.plot(np.array(SNRlist), linewidth = 3)
+                                pl.grid()
+                                pl.title("Component SNR Check", fontsize = 35)
+                                pl.ylabel("SNR (dB)", fontsize = 35)
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                clear_output(wait=True)
+                                display(pl.gcf())  
+
+    def fit_batch_simplex(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            S = self.S
+            A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
+        total_iteration = 1
+        if drop_last_batch:
+            m = (X.shape[1])//batch_size
+        else:
+            m = int(np.ceil((X.shape[1])/batch_size))
+        for epoch_ in range(n_epochs):
+            for kk in (range(m)):
+                Xbatch = X[:,kk*batch_size:(kk+1)*batch_size]
+                sample_batch_size = Xbatch.shape[1]
+                if kk == 0:
+                    Ybatch = np.zeros((self.s_dim, Xbatch.shape[1]))
+                else:
+                    Ybatch = self.W @ Xbatch
+                if method == "correlation":
+                    RX = (1/sample_batch_size) * np.dot(Xbatch, Xbatch.T)
+                    RXinv = np.linalg.pinv(RX)
+                elif method == "covariance":
+                    muX = np.mean(Xbatch, axis = 1)
+                    RX = (1/sample_batch_size) * (np.dot(Xbatch, Xbatch.T) - np.outer(muX, muX))
+                    RXinv = np.linalg.pinv(RX)
+
+                for k in tqdm(range(n_iterations_per_batch)):
+                    if method == "correlation":
+                        Ybatch = self.update_Y_corr_based(Ybatch, Xbatch, W, epsilon, (mu_start/np.sqrt((k+1)*kk+1)))
+                        Ybatch = self.ProjectColstoSimplex(Ybatch)
+                        RYX = (1/sample_batch_size) * np.dot(Ybatch, Xbatch.T)
+                    elif method == "covariance":
+                        Ybatch = self.update_Y_cov_based(Ybatch, Xbatch, muX, W, epsilon, (mu_start/np.sqrt(total_iteration+1)))
+                        Ybatch = self.ProjectColstoSimplex(Ybatch)
+                        muY = np.mean(Ybatch, axis = 1)
+                        RYX = (1/sample_batch_size) * (np.dot(Ybatch, Xbatch.T) - np.outer(muY, muX))
+                    W = np.dot(RYX, RXinv)
+                    self.W = W
+                    total_iteration += 1
+                    if debugging:
+                        if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                            Y = W @ X
+                            Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                            coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                            Y_ = coef_ * Y_
+                            SIR = self.CalculateSIR(A, W)[0]
+                            SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                            SINRlist.append(SINR)
+                            SNRlist.append(self.snr(S.T,Y_))
+                            SIRlist.append(SIR)
+                            self.SIR_list = SIRlist
+                            self.SINR_list = SINRlist
+                            self.SNR_list = SNRlist
+                            if plot_in_jupyter:
+                                pl.clf()
+                                pl.subplot(1,2,1)
+                                pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                                pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.ylabel("SINR (dB)", fontsize = 35)
+                                pl.title("SINR Behaviour", fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                pl.legend(fontsize=25)
+                                pl.grid()
+                                pl.subplot(1,2,2)
+                                pl.plot(np.array(SNRlist), linewidth = 3)
+                                pl.grid()
+                                pl.title("Component SNR Check", fontsize = 35)
+                                pl.ylabel("SNR (dB)", fontsize = 35)
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                clear_output(wait=True)
+                                display(pl.gcf())  
 
 class OnlineNSM:
     """
