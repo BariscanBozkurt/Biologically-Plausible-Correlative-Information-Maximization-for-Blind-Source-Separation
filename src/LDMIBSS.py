@@ -117,7 +117,8 @@ class OnlineLDMIBSS:
     def CalculateSINR(self, Out,S):
         r=S.shape[0]
         G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-        indmax=np.argmax(np.abs(G),1)
+        # indmax=np.argmax(np.abs(G),1)
+        indmax = np.mod(self.find_permutation_between_source_and_estimation(Out.T, S.T),r)
         GG=np.zeros((r,r))
         for kk in range(r):
             GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -2161,6 +2162,7 @@ class BatchLDMIBSS:
                     total_iteration += 1
                     if debugging:
                         if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                        # if (((k % debug_iteration_point) == 0) | (k == n_iterations_per_batch - 1)) & (k >= debug_iteration_point):
                             Y = W @ X
                             Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
                             coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
