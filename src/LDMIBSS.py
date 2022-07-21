@@ -2764,6 +2764,21 @@ class OnlineBCA:
 
         return SIRV,rankP
 
+    def CalculateSINR(self, Out,S):
+        r=S.shape[0]
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        # indmax=np.argmax(np.abs(G),1)
+        indmax = np.mod(self.find_permutation_between_source_and_estimation(Out.T, S.T),r)
+        GG=np.zeros((r,r))
+        for kk in range(r):
+            GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+        ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+        E=Out-ZZ
+        MSE=np.linalg.norm(E,'fro')**2
+        SigPow=np.linalg.norm(ZZ,'fro')**2
+        SINR=(SigPow/MSE)
+        return SINR,SigPow,MSE,G
+
     def whiten_signal(self, X, mean_normalize = True, type_ = 3):
         """
         Input : X  ---> Input signal to be whitened
@@ -2795,6 +2810,34 @@ class OnlineBCA:
 
         return X_white, W_pre
     
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
+    def outer_prod_broadcasting(self, A, B):
+        """Broadcasting trick"""
+        return A[...,None]*B[:,None]
+
+    def find_permutation_between_source_and_estimation(self, S, Y):
+        """
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+        
+        return the permutation of the source seperation algorithm
+        """
+        # perm = np.argmax(np.abs(np.corrcoef(S.T,Y.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(np.corrcoef(Y.T,S.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(outer_prod_broadcasting(S,Y).sum(axis = 0)), axis = 0)
+        perm = np.argmax(np.abs(self.outer_prod_broadcasting(Y,S).sum(axis = 0))/(np.linalg.norm(S,axis = 0)*np.linalg.norm(Y,axis=0)), axis = 0)
+        return perm
+
+    def signed_and_permutation_corrected_sources(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimation(S,Y)
+        return np.sign((Y[:,perm] * S).sum(axis = 0)) * Y[:,perm]
+
     def ProjectOntoLInfty(self, X):
         
         return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
@@ -2862,10 +2905,7 @@ class OnlineBCA:
         
         self.F = F
         self.B = B
-        
-        # return y
-        
-        
+         
     def fit_batch_antisparse(self, X, n_epochs = 2, neural_dynamic_iterations = 250, lr_start = 0.9, whiten = False, whiten_type = 2, shuffle = False, verbose = True, debug_iteration_point = 1000, plot_in_jupyter = False):
         
         lambda_, beta, mu_F, gamma_hat, F, B = self.lambda_, self.beta, self.mu_F, self.gamma_hat, self.F, self.B
@@ -2878,8 +2918,11 @@ class OnlineBCA:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -2923,17 +2966,39 @@ class OnlineBCA:
                         self.F = F
                         self.B = B
                         W = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = W @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, W)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
                             display(pl.gcf())   
         self.F = F
@@ -2951,8 +3016,11 @@ class OnlineBCA:
         
         if debugging:
             SIRlist = []
+            SINRlist = []
+            SNRlist = []
             S = self.S
             A = self.A
+            plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
         Y = np.random.randn(self.s_dim, samples)
@@ -2996,19 +3064,41 @@ class OnlineBCA:
                         self.F = F
                         self.B = B
                         W = self.compute_overall_mapping(return_mapping = True)
+                        Y_ = W @ X
+                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
+                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, W)[0]
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
                         SIRlist.append(SIR)
+                        SINRlist.append(SINR)
+                        SNRlist.append(self.snr(S.T,Y_))
                         self.SIR_list = SIRlist
+                        self.SINR_list = SINRlist
+                        self.SNR_list = SNRlist
 
                         if plot_in_jupyter:
                             pl.clf()
-                            pl.plot(np.array(SIRlist), linewidth = 3)
-                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
-                            pl.ylabel("SIR (dB)", fontsize = 15)
-                            pl.title("SIR Behaviour", fontsize = 15)
+                            pl.subplot(1,2,1)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SIRlist), linewidth = 3, label = "SIR")
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SINRlist), linewidth = 3, label = "SINR")
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.ylabel("SINR (dB)", fontsize = 35)
+                            pl.title("SINR Behaviour", fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
+                            pl.legend(fontsize=25)
                             pl.grid()
+                            pl.subplot(1,2,2)
+                            pl.plot(np.arange(1,len(self.SINR_list)+1), np.array(SNRlist), linewidth = 3)
+                            pl.grid()
+                            pl.title("Component SNR Check", fontsize = 35)
+                            pl.ylabel("SNR (dB)", fontsize = 35)
+                            pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                            pl.xticks(fontsize=45)
+                            pl.yticks(fontsize=45)
                             clear_output(wait=True)
-                            display(pl.gcf())   
+                            display(pl.gcf())    
         self.F = F
         self.B = B
 
