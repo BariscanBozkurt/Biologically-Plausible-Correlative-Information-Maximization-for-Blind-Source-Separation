@@ -114,11 +114,14 @@ class OnlineLDMIBSS:
 
         return SIRV,rankP
 
-    def CalculateSINR(self, Out,S):
+    def CalculateSINR(self, Out, S, compute_permutation = True):
         r=S.shape[0]
-        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-        # indmax=np.argmax(np.abs(G),1)
-        indmax = np.mod(self.find_permutation_between_source_and_estimation(Out.T, S.T),r)
+        if compute_permutation:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax=np.argmax(np.abs(G),1)
+        else:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax = np.arange(0,r)
         GG=np.zeros((r,r))
         for kk in range(r):
             GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -1045,6 +1048,7 @@ class OnlineLDMIBSS:
             SNRlist = []
             S = self.S
             A = self.A
+            Szeromean = S - S.mean(axis = 1).reshape(-1,1)
             plt.figure(figsize = (25, 10), dpi = 80)
 
         # Y = np.zeros((self.s_dim, samples))
@@ -1086,15 +1090,16 @@ class OnlineLDMIBSS:
                         self.By = By
                         self.Be = Be
                         Wf = self.compute_overall_mapping(return_mapping = True)
-                        Y_ = Wf @ X
-                        Y_ = self.signed_and_permutation_corrected_sources(S.T,Y_.T)
-                        coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                        Y = Wf @ X
+                        Yzeromean = Y - Y.mean(axis = 1).reshape(-1,1)
+                        Y_ = self.signed_and_permutation_corrected_sources(Szeromean.T,Yzeromean.T)
+                        coef_ = (Y_ * Szeromean.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
                         Y_ = coef_ * Y_
                         SIR = self.CalculateSIR(A, Wf)[0]
-                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                        SINR = 10*np.log10(self.CalculateSINR(Y_.T, Szeromean)[0])
                         SIRlist.append(SIR)
                         SINRlist.append(SINR)
-                        SNRlist.append(self.snr(S.T,Y_))
+                        SNRlist.append(self.snr(Szeromean.T,Y_))
                         self.SIR_list = SIRlist
                         self.SINR_list = SINRlist
                         self.SNR_list = SNRlist
@@ -1343,10 +1348,14 @@ class LDMIBSS:
 
         return SIRV,rankP
 
-    def CalculateSINR(self, Out,S):
+    def CalculateSINR(self, Out, S, compute_permutation = True):
         r=S.shape[0]
-        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-        indmax=np.argmax(np.abs(G),1)
+        if compute_permutation:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax=np.argmax(np.abs(G),1)
+        else:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax = np.arange(0,r)
         GG=np.zeros((r,r))
         for kk in range(r):
             GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -1913,11 +1922,14 @@ class BatchLDMIBSS:
 
         return SIRV,rankP
 
-    def CalculateSINR(self, Out,S):
+    def CalculateSINR(self, Out, S, compute_permutation = True):
         r=S.shape[0]
-        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-        indmax=np.argmax(np.abs(G),1)
-        # indmax = np.mod(find_permutation_between_source_and_estimation(Out.T, S.T),r)
+        if compute_permutation:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax=np.argmax(np.abs(G),1)
+        else:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax = np.arange(0,r)
         GG=np.zeros((r,r))
         for kk in range(r):
             GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -2764,11 +2776,14 @@ class OnlineBCA:
 
         return SIRV,rankP
 
-    def CalculateSINR(self, Out,S):
+    def CalculateSINR(self, Out, S, compute_permutation = True):
         r=S.shape[0]
-        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-        # indmax=np.argmax(np.abs(G),1)
-        indmax = np.mod(self.find_permutation_between_source_and_estimation(Out.T, S.T),r)
+        if compute_permutation:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax=np.argmax(np.abs(G),1)
+        else:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax = np.arange(0,r)
         GG=np.zeros((r,r))
         for kk in range(r):
             GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -3283,7 +3298,6 @@ class OnlineBSM:
         self.M = M
         self.D = D
         
-        
     def fit_batch_antisparse(self, X, n_epochs = 1, shuffle = False, neural_dynamic_iterations = 250, neural_lr_start = 0.3, neural_lr_stop = 1e-3, fast_start = False, debug_iteration_point = 1000, plot_in_jupyter = False):
         gamma, mu, beta, W, M, D = self.gamma, self.mu, self.beta, self.W, self.M, self.D
         neural_OUTPUT_COMP_TOL = self.neural_OUTPUT_COMP_TOL
@@ -3601,10 +3615,14 @@ def CalculateSIR(H,pH, return_db = True):
 
     return SIRV,rankP
 
-def CalculateSINR(Out,S):
+def CalculateSINR(Out, S, compute_permutation = True):
     r=S.shape[0]
-    G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
-    indmax=np.argmax(np.abs(G),1)
+    if compute_permutation:
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        indmax=np.argmax(np.abs(G),1)
+    else:
+        G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+        indmax = np.arange(0,r)
     GG=np.zeros((r,r))
     for kk in range(r):
         GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
@@ -3723,6 +3741,20 @@ def addWGN(signal, SNR, return_noise = False, print_resulting_SNR = False):
         return signal_noisy, noise
     else:
         return signal_noisy
+
+def WSM_Mixing_Scenario(S, NumberofMixtures = None, INPUT_STD = None):
+    NumberofSources = S.shape[0]
+    if INPUT_STD is None:
+        INPUT_STD = S.std()
+    if NumberofMixtures is None:
+        NumberofMixtures = NumberofSources
+    A = np.random.standard_normal(size=(NumberofMixtures,NumberofSources))
+    X = A @ S
+    for M in range(A.shape[0]):
+        stdx = np.std(X[M,:])
+        A[M,:] = A[M,:]/stdx * INPUT_STD
+        
+    return A, X
 
 def generate_correlated_uniform_sources(R, range_ = [-1,1], n_sources = 5, size_sources = 500000):
     """
