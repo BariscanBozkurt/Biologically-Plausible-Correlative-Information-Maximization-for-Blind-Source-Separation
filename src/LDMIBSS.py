@@ -1297,15 +1297,9 @@ class LDMIBSS:
     s_dim          -- Dimension of the sources
     x_dim          -- Dimension of the mixtures
     W              -- Feedforward Synapses
-    By             -- Inverse Output Covariance
-    Be             -- Inverse Error Covariance
-    lambday        -- Ry forgetting factor
-    lambdae        -- Re forgetting factor
 
-    
     Methods:
     ==================================
-    run_neural_dynamics_antisparse
     fit_batch_antisparse
     fit_batch_nnantisparse
 
@@ -2470,6 +2464,219 @@ class BatchLDMIBSS:
                                 pl.yticks(fontsize=45)
                                 clear_output(wait=True)
                                 display(pl.gcf())  
+
+class PMF:
+
+    """
+    Implementation of batch Polytopic Matrix Factorization
+    Parameters:
+    =================================
+    s_dim          -- Dimension of the sources
+    x_dim          -- Dimension of the mixtures
+    H              -- Feedforward Synapses
+    
+    Methods:
+    ==================================
+    fit_batch_antisparse
+    fit_batch_nnantisparse
+
+    """
+    
+    def __init__(self, s_dim, x_dim, H = None, set_ground_truth = False, Sgt = None, Agt = None):
+        if H is not None:
+            assert H.shape == (x_dim, s_dim), "The shape of the initial guess H must be (s_dim, x_dim) = (%d,%d)" % (s_dim, x_dim)
+            H = H
+        else:
+            H = np.random.randn(x_dim, s_dim)
+            
+        self.s_dim = s_dim
+        self.x_dim = x_dim
+        self.H = H
+        ### Ground Truth Sources and Mixing Matrix For Debugging
+        self.set_ground_truth = set_ground_truth
+        self.Sgt = Sgt # Ground Truth Sources
+        self.Agt = Agt # Ground Truth Mixing Matrix
+        self.SIR_list = []
+        self.SINR_list = []
+        self.SNR_list = []
+
+    # Calculate SIR Function
+    def CalculateSIR(self, H,pH, return_db = True):
+        G=pH@H
+        Gmax=np.diag(np.max(abs(G),axis=1))
+        P=1.0*((np.linalg.inv((Gmax))@np.abs(G))>0.99)
+        T=G@P.T
+        rankP=np.linalg.matrix_rank(P)
+        diagT = np.diag(T)
+        # Signal Power
+        sigpow = np.linalg.norm(diagT,2)**2
+        # Interference Power
+        intpow = np.linalg.norm(T,'fro')**2 - sigpow
+        SIRV = sigpow/intpow
+        # SIRV=np.linalg.norm((np.diag(T)))**2/(np.linalg.norm(T,'fro')**2-np.linalg.norm(np.diag(T))**2)
+        if return_db:
+            SIRV = 10*np.log10(sigpow/intpow)
+
+        return SIRV,rankP
+
+    def CalculateSINR(self, Out, S, compute_permutation = True):
+        r=S.shape[0]
+        if compute_permutation:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax=np.argmax(np.abs(G),1)
+        else:
+            G=np.dot(Out-np.reshape(np.mean(Out,1),(r,1)),np.linalg.pinv(S-np.reshape(np.mean(S,1),(r,1))))
+            indmax = np.arange(0,r)
+        GG=np.zeros((r,r))
+        for kk in range(r):
+            GG[kk,indmax[kk]]=np.dot(Out[kk,:]-np.mean(Out[kk,:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))/np.dot(S[indmax[kk],:]-np.mean(S[indmax[kk],:]),S[indmax[kk],:].T-np.mean(S[indmax[kk],:]))#(G[kk,indmax[kk]])
+        ZZ=GG@(S-np.reshape(np.mean(S,1),(r,1)))+np.reshape(np.mean(Out,1),(r,1))
+        E=Out-ZZ
+        MSE=np.linalg.norm(E,'fro')**2
+        SigPow=np.linalg.norm(ZZ,'fro')**2
+        SINR=(SigPow/MSE)
+        return SINR,SigPow,MSE,G
+
+    def snr(self, S_original, S_noisy):
+        N_hat = S_original - S_noisy
+        N_P = (N_hat ** 2).sum(axis = 0)
+        S_P = (S_original ** 2).sum(axis = 0)
+        snr = 10 * np.log10(S_P / N_P)
+        return snr
+
+    def outer_prod_broadcasting(self, A, B):
+        """Broadcasting trick"""
+        return A[...,None]*B[:,None]
+
+    def find_permutation_between_source_and_estimation(self, S, Y):
+        """
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+        
+        return the permutation of the source seperation algorithm
+        """
+        # perm = np.argmax(np.abs(np.corrcoef(S.T,Y.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(np.corrcoef(Y.T,S.T) - np.eye(2*S.shape[1])),axis = 0)[S.shape[1]:]
+        # perm = np.argmax(np.abs(outer_prod_broadcasting(S,Y).sum(axis = 0)), axis = 0)
+        perm = np.argmax(np.abs(self.outer_prod_broadcasting(Y,S).sum(axis = 0))/(np.linalg.norm(S,axis = 0)*np.linalg.norm(Y,axis=0)), axis = 0)
+        return perm
+
+    def signed_and_permutation_corrected_sources(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimation(S,Y)
+        return np.sign((Y[:,perm] * S).sum(axis = 0)) * Y[:,perm]
+
+    @staticmethod
+    @njit
+    def ProjectOntoLInfty(X):
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+    @staticmethod
+    @njit
+    def ProjectOntoNNLInfty(X):
+        return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
+        
+    def ProjectRowstoL1NormBall(self, H):
+        Hshape=H.shape
+        #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
+        lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
+        #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
+
+        u=-np.sort(-np.abs(H),axis=1)
+        sv=np.cumsum(u,axis=1)
+        q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
+        rho=np.max(q,axis=1)
+        rho=rho.astype(int)
+        lindex=np.linspace(1,Hshape[0],Hshape[0])-1
+        lindex=lindex.astype(int)
+        theta=np.maximum(0,np.reshape((sv[tuple([lindex,rho])]-1)/(rho+1),(Hshape[0],1)))
+        ww=np.abs(H)-theta
+        H=np.sign(H)*(ww>0)*ww
+        return H
+
+    def ProjectColstoSimplex(self, v, z=1):
+        """v array of shape (n_features, n_samples)."""
+        p, n = v.shape
+        u = np.sort(v, axis=0)[::-1, ...]
+        pi = np.cumsum(u, axis=0) - z
+        ind = (np.arange(p) + 1).reshape(-1, 1)
+        mask = (u - pi / ind) > 0
+        rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
+        theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
+        w = np.maximum(v - theta, 0)
+        return w
+
+    def fit_batch_nnantisparse(self, Y, n_iterations = 1000, lambda_ = 0.01, tau = 1e-8, debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        H = self.H
+        debugging = self.set_ground_truth
+        Identity = np.eye(self.s_dim)
+        F = Identity.copy()
+        q = 1
+        assert Y.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = Y.shape[1]
+        
+        if debugging:
+            SIRlist = []
+            SINRlist = []
+            SNRlist = []
+            Sgt = self.Sgt
+            Agt = self.Agt
+            plt.figure(figsize = (25, 10), dpi = 80)
+
+        S = np.zeros((self.s_dim, samples))
+        X = S.copy()
+        for k in range(n_iterations):
+            #### PMF Algorithm #################
+            Sprev = S.copy()
+            qprev = q + 0.0
+            # print(S.shape)
+            # print(H.shape)
+            # print(Y.shape)
+            # print(X.shape)
+            S = self.ProjectOntoNNLInfty(X - H.T @ (Y - H @ X))
+            q = (1 + np.sqrt(1 + q ** 2))/2.0
+            X = S + ((qprev - 1) / q) * (S - Sprev)
+            H = Y @ S.T @ (S @ S.T + lambda_ * F)
+            F = np.linalg.pinv(H.T @ H + tau * Identity)
+            if debugging:
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
+                    self.H = H
+                    S_ = self.signed_and_permutation_corrected_sources(Sgt.T,S.T)
+                    coef_ = (S_ * Sgt.T).sum(axis = 0) / (S_ * S_).sum(axis = 0)
+                    S_ = coef_ * S_
+                    self.S_ = S_
+                    # SIR = self.CalculateSIR(Agt, H)[0]
+                    SINR = 10*np.log10(self.CalculateSINR(S_.T, Sgt)[0])
+                    SINRlist.append(SINR)
+                    SNRlist.append(self.snr(S.T,S_))
+                    # SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+                    self.SINR_list = SINRlist
+                    self.SNR_list = SNRlist
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.subplot(1,2,1)
+                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.ylabel("SINR (dB)", fontsize = 35)
+                        pl.title("SINR Behaviour", fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        pl.legend(fontsize=25)
+                        pl.grid()
+                        pl.subplot(1,2,2)
+                        pl.plot(np.array(SNRlist), linewidth = 3)
+                        pl.grid()
+                        pl.title("Component SNR Check", fontsize = 35)
+                        pl.ylabel("SNR (dB)", fontsize = 35)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                        pl.xticks(fontsize=45)
+                        pl.yticks(fontsize=45)
+                        clear_output(wait=True)
+                        display(pl.gcf())  
+        self.H = H
 
 class OnlineNSM:
     """
