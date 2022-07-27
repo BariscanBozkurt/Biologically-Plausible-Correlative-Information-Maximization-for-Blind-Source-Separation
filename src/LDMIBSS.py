@@ -9,7 +9,6 @@ Date: 17.02.2022
 """
 
 from random import sample
-from telnetlib import XAUTH
 import numpy as np
 import scipy
 from scipy.stats import invgamma, chi2, t
@@ -1849,7 +1848,7 @@ class LDMIBSS:
                         display(pl.gcf())   
         self.W = W
 
-class BatchLDMIBSS:
+class MinibatchLDMIBSS:
 
     """
     Implementation of batch Log-Det Mutual Information Based Blind Source Separation Framework
@@ -2040,7 +2039,7 @@ class BatchLDMIBSS:
         w = np.maximum(v - theta, 0)
         return w
 
-    def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
+    def fit_batch_antisparse(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
         
         W = self.W
         debugging = self.set_ground_truth
@@ -2056,65 +2055,78 @@ class BatchLDMIBSS:
             S = self.S
             A = self.A
             plt.figure(figsize = (25, 10), dpi = 80)
+        total_iteration = 1
+        if drop_last_batch:
+            m = (X.shape[1])//batch_size
+        else:
+            m = int(np.ceil((X.shape[1])/batch_size))
+        for epoch_ in range(n_epochs):
+            for kk in (range(m)):
+                Xbatch = X[:,kk*batch_size:(kk+1)*batch_size]
+                sample_batch_size = Xbatch.shape[1]
+                if kk == 0:
+                    Ybatch = np.random.randn(self.s_dim, Xbatch.shape[1])/5
+                    Ybatch = np.zeros((self.s_dim, Xbatch.shape[1]))
+                else:
+                    Ybatch = self.W @ Xbatch
+                if method == "correlation":
+                    RX = (1/sample_batch_size) * np.dot(Xbatch, Xbatch.T)
+                    RXinv = np.linalg.pinv(RX)
+                elif method == "covariance":
+                    muX = np.mean(Xbatch, axis = 1)
+                    RX = (1/sample_batch_size) * (np.dot(Xbatch, Xbatch.T) - np.outer(muX, muX))
+                    RXinv = np.linalg.pinv(RX)
 
-        if method == "correlation":
-            RX = (1/samples) * np.dot(X, X.T)
-            RXinv = np.linalg.pinv(RX)
-        elif method == "covariance":
-            muX = np.mean(X, axis = 1)
-            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
-            RXinv = np.linalg.pinv(RX)
-        Y = np.zeros((self.s_dim, samples))
-        # Y = (np.random.rand(self.s_dim, samples) - 0.5)/2
-        for k in range(n_iterations):
-            if method == "correlation":
-                Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
-                Y = self.ProjectOntoLInfty(Y)
-                RYX = (1/samples) * np.dot(Y, X.T)
-            elif method == "covariance":
-                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
-                Y = self.ProjectOntoLInfty(Y)
-                muY = np.mean(Y, axis = 1)
-                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
-            W = np.dot(RYX, RXinv)
-
-            if debugging:
-                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
+                for k in tqdm(range(n_iterations_per_batch)):
+                    if method == "correlation":
+                        Ybatch = self.update_Y_corr_based(Ybatch, Xbatch, W, epsilon, (mu_start/np.sqrt((k+1)*kk+1)))
+                        Ybatch = self.ProjectOntoLInfty(Ybatch)
+                        RYX = (1/sample_batch_size) * np.dot(Ybatch, Xbatch.T)
+                    elif method == "covariance":
+                        Ybatch = self.update_Y_cov_based(Ybatch, Xbatch, muX, W, epsilon, (mu_start/np.sqrt(total_iteration+1)))
+                        Ybatch = self.ProjectOntoLInfty(Ybatch)
+                        muY = np.mean(Ybatch, axis = 1)
+                        RYX = (1/sample_batch_size) * (np.dot(Ybatch, Xbatch.T) - np.outer(muY, muX))
+                    W = np.dot(RYX, RXinv)
                     self.W = W
-                    Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
-                    coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
-                    Y_ = coef_ * Y_
-                    SIR = self.CalculateSIR(A, W)[0]
-                    SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
-                    SINRlist.append(SINR)
-                    SNRlist.append(self.snr(S.T,Y_))
-                    SIRlist.append(SIR)
-                    self.SIR_list = SIRlist
-                    self.SINR_list = SINRlist
-                    self.SNR_list = SNRlist
-                    if plot_in_jupyter:
-                        pl.clf()
-                        pl.subplot(1,2,1)
-                        pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
-                        pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
-                        pl.ylabel("SINR (dB)", fontsize = 35)
-                        pl.title("SINR Behaviour", fontsize = 35)
-                        pl.xticks(fontsize=45)
-                        pl.yticks(fontsize=45)
-                        pl.legend(fontsize=25)
-                        pl.grid()
-                        pl.subplot(1,2,2)
-                        pl.plot(np.array(SNRlist), linewidth = 3)
-                        pl.grid()
-                        pl.title("Component SNR Check", fontsize = 35)
-                        pl.ylabel("SNR (dB)", fontsize = 35)
-                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
-                        pl.xticks(fontsize=45)
-                        pl.yticks(fontsize=45)
-                        clear_output(wait=True)
-                        display(pl.gcf())  
-        self.W = W
+                    total_iteration += 1
+                    if debugging:
+                        if ((k % debug_iteration_point) == 0)  | (k == n_iterations_per_batch - 1):
+                        # if (((k % debug_iteration_point) == 0) | (k == n_iterations_per_batch - 1)) & (k >= debug_iteration_point):
+                            Y = W @ X
+                            Y_ = self.signed_and_permutation_corrected_sources(S.T,Y.T)
+                            coef_ = (Y_ * S.T).sum(axis = 0) / (Y_ * Y_).sum(axis = 0)
+                            Y_ = coef_ * Y_
+                            SIR = self.CalculateSIR(A, W)[0]
+                            SINR = 10*np.log10(self.CalculateSINR(Y_.T, S)[0])
+                            SINRlist.append(SINR)
+                            SNRlist.append(self.snr(S.T,Y_))
+                            SIRlist.append(SIR)
+                            self.SIR_list = SIRlist
+                            self.SINR_list = SINRlist
+                            self.SNR_list = SNRlist
+                            if plot_in_jupyter:
+                                pl.clf()
+                                pl.subplot(1,2,1)
+                                pl.plot(np.array(SIRlist), linewidth = 3, label = "SIR")
+                                pl.plot(np.array(SINRlist), linewidth = 3, label = "SINR")
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.ylabel("SINR (dB)", fontsize = 35)
+                                pl.title("SINR Behaviour", fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                pl.legend(fontsize=25)
+                                pl.grid()
+                                pl.subplot(1,2,2)
+                                pl.plot(np.array(SNRlist), linewidth = 3)
+                                pl.grid()
+                                pl.title("Component SNR Check", fontsize = 35)
+                                pl.ylabel("SNR (dB)", fontsize = 35)
+                                pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 35)
+                                pl.xticks(fontsize=45)
+                                pl.yticks(fontsize=45)
+                                clear_output(wait=True)
+                                display(pl.gcf())  
 
     def fit_batch_nnantisparse(self, X, batch_size = 10000, n_epochs = 1, n_iterations_per_batch = 500, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, drop_last_batch = True, plot_in_jupyter = False):
         
