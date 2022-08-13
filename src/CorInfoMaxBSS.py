@@ -175,8 +175,6 @@ class OnlineCorInfoMax(BSSBaseClass):
     @staticmethod
     @njit
     def run_neural_dynamics_nnantisparse(x, y, W, My, Be, gamy, game, lr_start = 0.9, lr_stop = 1e-15, neural_dynamic_iterations = 100, neural_OUTPUT_COMP_TOL = 1e-7):
-        def ProjectOntoNNLInfty(X, thresh = 1.0):
-            return X*(X>=0.0)*(X<=thresh)+(X>thresh)*thresh #-thresh*(X<-thresh)
 
         yke = np.dot(W, x)
         for j in range(neural_dynamic_iterations):
@@ -186,7 +184,7 @@ class OnlineCorInfoMax(BSSBaseClass):
             e = yke - y
             grady = -y + gamy * My @ y + game * Be @ e
             y = y + mu_y * (grady)
-            y = ProjectOntoNNLInfty(y)
+            y = np.clip(y, 0, 1)
 
             if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
                 break

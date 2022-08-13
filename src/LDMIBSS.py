@@ -145,46 +145,6 @@ class LDMIBSS(BSSBaseClass):
         Y = Y + (step_size) * gradY
         return Y
 
-    @staticmethod
-    @njit
-    def ProjectOntoLInfty(X):
-        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
-    
-    @staticmethod
-    @njit
-    def ProjectOntoNNLInfty(X):
-        return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
-        
-    def ProjectRowstoL1NormBall(self, H):
-        Hshape=H.shape
-        #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
-        lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
-        #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
-
-        u=-np.sort(-np.abs(H),axis=1)
-        sv=np.cumsum(u,axis=1)
-        q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
-        rho=np.max(q,axis=1)
-        rho=rho.astype(int)
-        lindex=np.linspace(1,Hshape[0],Hshape[0])-1
-        lindex=lindex.astype(int)
-        theta=np.maximum(0,np.reshape((sv[tuple([lindex,rho])]-1)/(rho+1),(Hshape[0],1)))
-        ww=np.abs(H)-theta
-        H=np.sign(H)*(ww>0)*ww
-        return H
-
-    def ProjectColstoSimplex(self, v, z=1):
-        """v array of shape (n_features, n_samples)."""
-        p, n = v.shape
-        u = np.sort(v, axis=0)[::-1, ...]
-        pi = np.cumsum(u, axis=0) - z
-        ind = (np.arange(p) + 1).reshape(-1, 1)
-        mask = (u - pi / ind) > 0
-        rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
-        theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
-        w = np.maximum(v - theta, 0)
-        return w
-
     def fit_batch_antisparse(self, X, n_iterations = 1000, epsilon = 1e-3, mu_start = 100, method = "correlation", debug_iteration_point = 1, plot_in_jupyter = False):
         
         W = self.W
@@ -478,7 +438,6 @@ class LDMIBSS(BSSBaseClass):
                     except Exception as e:
                         print(str(e))  
         self.W = W
-
 
 class MinibatchLDMIBSS(LDMIBSS):
 

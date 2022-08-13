@@ -6,6 +6,77 @@ from numba import njit
 
 class BSSBaseClass:
 
+    def whiten_input(self, X, n_components = None, return_prewhitening_matrix = False):
+        """
+        X.shape[0] = Number of sources
+        X.shape[1] = Number of samples for each signal
+        """
+        x_dim = X.shape[0]
+        if n_components is None:
+            n_components = x_dim
+        s_dim = n_components
+        
+        N = X.shape[1]
+        # Mean of the mixtures
+        mX = np.mean(X, axis = 1).reshape((x_dim, 1))
+        # Covariance of Mixtures
+        Rxx = np.dot(X, X.T)/N - np.dot(mX, mX.T)
+        # Eigenvalue Decomposition
+        d, V = np.linalg.eig(Rxx)
+        D = np.diag(d)
+        # Sorting indexis for eigenvalues from large to small
+        ie = np.argsort(-d)
+        # Inverse square root of eigenvalues
+        ddinv = 1/np.sqrt(d[ie[:s_dim]])
+        # Pre-whitening matrix
+        Wpre = np.dot(np.diag(ddinv), V[:, ie[:s_dim]].T)#*np.sqrt(12)
+        # Whitened mixtures
+        H = np.dot(Wpre, X)
+        if return_prewhitening_matrix:
+            return H, Wpre
+        else:
+            return H
+
+    @staticmethod
+    @njit
+    def ProjectOntoLInfty(X):
+        return X*(X>=-1.0)*(X<=1.0)+(X>1.0)*1.0-1.0*(X<-1.0)
+    
+    @staticmethod
+    @njit
+    def ProjectOntoNNLInfty(X):
+        return X*(X>=0.0)*(X<=1.0)+(X>1.0)*1.0#-0.0*(X<0.0)
+        
+    def ProjectRowstoL1NormBall(self, H):
+        Hshape=H.shape
+        #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
+        lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
+        #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
+
+        u=-np.sort(-np.abs(H),axis=1)
+        sv=np.cumsum(u,axis=1)
+        q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
+        rho=np.max(q,axis=1)
+        rho=rho.astype(int)
+        lindex=np.linspace(1,Hshape[0],Hshape[0])-1
+        lindex=lindex.astype(int)
+        theta=np.maximum(0,np.reshape((sv[tuple([lindex,rho])]-1)/(rho+1),(Hshape[0],1)))
+        ww=np.abs(H)-theta
+        H=np.sign(H)*(ww>0)*ww
+        return H
+
+    def ProjectColstoSimplex(self, v, z=1):
+        """v array of shape (n_features, n_samples)."""
+        p, n = v.shape
+        u = np.sort(v, axis=0)[::-1, ...]
+        pi = np.cumsum(u, axis=0) - z
+        ind = (np.arange(p) + 1).reshape(-1, 1)
+        mask = (u - pi / ind) > 0
+        rho = p - 1 - np.argmax(mask[::-1, ...], axis=0)
+        theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
+        w = np.maximum(v - theta, 0)
+        return w
+
     def CalculateSIR(self, H,pH, return_db = True):
         G=pH@H
         Gmax=np.diag(np.max(abs(G),axis=1))
