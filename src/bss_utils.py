@@ -44,10 +44,7 @@ def ProjectOntoLInfty(X):
 
 def ProjectRowstoL1NormBall(H):
     Hshape=H.shape
-    #lr=np.ones((Hshape[0],1))@np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1]))
     lr=np.tile(np.reshape((1/np.linspace(1,Hshape[1],Hshape[1])),(1,Hshape[1])),(Hshape[0],1))
-    #Hnorm1=np.reshape(np.sum(np.abs(self.H),axis=1),(Hshape[0],1))
-
     u=-np.sort(-np.abs(H),axis=1)
     sv=np.cumsum(u,axis=1)
     q=np.where(u>((sv-1)*lr),np.tile(np.reshape((np.linspace(1,Hshape[1],Hshape[1])-1),(1,Hshape[1])),(Hshape[0],1)),np.zeros((Hshape[0],Hshape[1])))
@@ -71,6 +68,86 @@ def ProjectColstoSimplex(v, z=1):
     theta = pi[tuple([rho, np.arange(n)])] / (rho + 1)
     w = np.maximum(v - theta, 0)
     return w
+
+# def ProjectColumnsOntoPracticalPolytope(x, signed_dims, nn_dims, sparse_dims_list, max_number_of_iterations = 5):
+#     ### THIS PROJECTION IS NOT EXACT, NEED MORE DEBUGGING !!!!!
+#     """Projection onto a practical polytope in the form of 
+#        $\left\{\mathbf{s}\in \mathbb{R}^n\ \middle\vert  s_i\in[-1,1] \, \forall i\in \mathcal{I}_s,\, s_i\in[0,1] \, 
+#        \forall i\in \mathcal{I}_+, \, \left\|\vs_{\mathcal{J}_k}\right\|_1\le 1, \, \mathcal{J}_k\subseteq \mathbb{Z}_n, \, 
+#        k\in\mathbb{Z}_L  \right\}$
+
+#     Args:
+#         x (numpy array): A point to be projected on the polytope
+#         antisparse_dims (numpy array): Antisparse dimension indices
+#         nonnegative_dims (numpy array): Nonnegative antisparse dimension indices
+#         sparse_dims_list (list of numpy arrays): Collection of mutually sparse dimension indices
+#         max_number_of_iterations (int, optional): Maximum number of iterations for alternating projections. Defaults to 1.
+
+#     Returns:
+#         _type_: _description_
+#     """
+#     x_projected = x.copy()
+#     x_projected[signed_dims, :] = np.clip(x_projected[signed_dims, :], -1, 1)
+#     x_projected[nn_dims, :] = np.clip(x_projected[nn_dims, :], 0, 1)
+#     for kk in range(max_number_of_iterations):
+#         for j in range(len(sparse_dims_list)):
+#             x_projected[signed_dims, :] = np.clip(x_projected[signed_dims, :], -1, 1)
+#             x_projected[nn_dims, :] = np.clip(x_projected[nn_dims, :], 0, 1)
+#             x_projected[sparse_dims_list[j], :] = ProjectRowstoL1NormBall(x[sparse_dims_list[j], :].T).T
+#     return x_projected
+
+# def ProjectOntoPracticalPolytope(x, signed_dims, nn_dims, sparse_dims_list, inequalities = (None, None), max_number_of_iterations = 1, tolerance = 1e-7):
+#     x_projected = x.copy()
+#     if (inequalities[0] is not None) & (inequalities[1] is not None):
+#         A = inequalities[0]
+#         b = inequalities[1].reshape(-1,1)
+#     else:
+#         tolerance = -100
+        
+#     x_projected[signed_dims] = np.clip(x_projected[signed_dims], -1, 1)
+#     x_projected[nn_dims] = np.clip(x_projected[nn_dims], 0, 1)
+    
+#     for kk in range(max_number_of_iterations):
+#         for j in range(len(sparse_dims_list)):
+#             x_projected[signed_dims] = np.clip(x_projected[signed_dims], -1, 1)
+#             x_projected[nn_dims] = np.clip(x_projected[nn_dims], 0, 1)
+#             x_projected[sparse_dims_list[j]] = ProjectRowstoL1NormBall(x[sparse_dims_list[j]].T).T
+# #             x_projected[signed_dims] = np.clip(x_projected[signed_dims], -1, 1)
+# #             x_projected[nn_dims] = np.clip(x_projected[nn_dims], 0, 1)
+#         print(np.linalg.norm(np.clip(A @ x_projected - b[:,np.newaxis],0, 1e10)))
+#         if np.linalg.norm(np.clip(A @ x_projected - b[:,np.newaxis],0, 1e10)) < tolerance:
+#             break
+#     return x_projected
+
+def ProjectRowstoBoundaryRectangle(H, BoundMin, BoundMax):
+    Hshape = H.shape
+    a0 = 1-2*(np.sum(H, axis = 0) < 0)*(BoundMin == 0)
+    AA0 = np.diag(np.reshape(a0, (-1,)))
+    H = np.dot(H, AA0)
+    BoundMaxlist = np.dot(np.ones((Hshape[0],1)), BoundMax)
+    BoundMinlist = np.dot(np.ones(( Hshape[0],1)), BoundMin)
+    CheckMin = 1.0*(H > BoundMinlist)
+    a = 1-2.0*(np.sum(CheckMin, axis=0) == 0)*(BoundMin == 0)
+    AA = np.diag(np.reshape(a, (-1,)))
+    H=np.dot(H,AA)
+    CheckMax = 1.0*(H < BoundMaxlist)
+    CheckMin = 1.0*(H > BoundMinlist)
+    H = H*CheckMax*CheckMin+(1-CheckMin)*BoundMinlist+(1-CheckMax)*BoundMaxlist
+    return H
+
+def ProjectColumnsOntoPracticalPolytope(x, signed_dims, nn_dims, sparse_dims_list, max_number_of_iterations = 1):
+    dim = len(signed_dims) + len(nn_dims)
+    BoundMax = np.ones((dim,1)).T
+    BoundMin = -np.ones((dim,1)).T
+    BoundMin[:,nn_dims] = 0
+    x_projected = x.copy()
+    x_projected[signed_dims, :] = np.clip(x_projected[signed_dims, :], -1, 1)
+    x_projected[nn_dims, :] = np.clip(x_projected[nn_dims, :], 0, 1)
+    for kk in range(max_number_of_iterations):
+        for j in range(len(sparse_dims_list)):
+            x_projected = ProjectRowstoBoundaryRectangle(x_projected.T, BoundMin, BoundMax).T
+            x_projected[sparse_dims_list[j], :] = ProjectRowstoL1NormBall(x_projected[sparse_dims_list[j], :].T).T
+    return x_projected
 
 ########### SIGNAL TO INTERFERENCE-PLUS-NOISE RATIO FUNCTIONS ##################
 def CalculateSIR(H,pH, return_db = True):

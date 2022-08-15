@@ -28,8 +28,7 @@ class LDMIBSS(BSSBaseClass):
 
     Methods:
     ==================================
-    fit_batch_antisparse
-    fit_batch_nnantisparse
+
 
     """
     
@@ -415,6 +414,74 @@ class LDMIBSS(BSSBaseClass):
             elif method == "covariance":
                 Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, (mu_start/np.sqrt(k+1)))
                 Y = self.ProjectColstoSimplex(Y)
+                muY = np.mean(Y, axis = 1)
+                RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
+            W = np.dot(RYX, RXinv)
+
+            if debugging:
+                if ((k % debug_iteration_point) == 0)  | (k == n_iterations - 1):
+                    try:
+                        self.W = W
+                        SINR, SNR, SGG, Y_, P = self.evaluate_for_debug(W, Y, A, S, X)
+                        self.SV_list.append(abs(SGG))
+                        SIR_list.append(SINR)
+                        SNR_list.append(SNR)
+
+                        self.SIR_list = SIR_list
+                        self.SNR_list = SNR_list
+
+                        if plot_in_jupyter:
+                            random_idx = np.random.randint(Y.shape[1]-25)
+                            YforPlot = Y[:,random_idx-25:random_idx].T
+                            self.plot_for_debug(SIR_list, SNR_list, P, debug_iteration_point, YforPlot)
+                    except Exception as e:
+                        print(str(e))  
+        self.W = W
+
+    def fit_batch_general_polytope(self, X, signed_dims, nn_dims, sparse_dims_list, n_iterations = 1000, epsilon = 1e-3, 
+                                   mu_start = 100, method = "correlation", lr_rule = "inv", 
+                                   debug_iteration_point = 1, plot_in_jupyter = False):
+        
+        W = self.W
+        debugging = self.set_ground_truth
+
+        assert X.shape[0] == self.x_dim, "You must input the transpose"
+        
+        samples = X.shape[1]
+        
+        if debugging:
+            SIR_list = self.SIR_list
+            SNR_list = self.SNR_list
+            self.SV_list = []
+            S = self.S
+            A = self.A
+            if plot_in_jupyter:
+                plt.figure(figsize = (45, 30), dpi = 80)
+
+        if method == "correlation":
+            RX = (1/samples) * np.dot(X, X.T)
+            RXinv = np.linalg.pinv(RX)
+        elif method == "covariance":
+            muX = np.mean(X, axis = 1)
+            RX = (1/samples) * (np.dot(X, X.T) - np.outer(muX, muX))
+            RXinv = np.linalg.pinv(RX)
+        Y = np.zeros((self.s_dim, samples))
+        # Y = np.random.rand(self.s_dim, samples)/2
+        for k in tqdm(range(n_iterations)):
+            if lr_rule == "constant":
+                update_mu = mu_start
+            elif lr_rule == "inv_sqrt":
+                 update_mu = mu_start / np.sqrt(k+1)
+            elif lr_rule == "inv":
+                update_mu = mu_start / (k+1)
+            if method == "correlation":
+                # Y = self.update_Y_corr_based(Y, X, W, epsilon, (mu_start/np.sqrt(k+1)))
+                Y = self.update_Y_corr_based(Y, X, W, epsilon, update_mu)
+                Y = self.ProjectColumnsOntoPracticalPolytope(Y, signed_dims, nn_dims, sparse_dims_list)
+                RYX = (1/samples) * np.dot(Y, X.T)
+            elif method == "covariance":
+                Y = self.update_Y_cov_based(Y, X, muX, W, epsilon, update_mu)
+                Y = self.ProjectColumnsOntoPracticalPolytope(Y, signed_dims, nn_dims, sparse_dims_list)
                 muY = np.mean(Y, axis = 1)
                 RYX = (1/samples) * (np.dot(Y, X.T) - np.outer(muY, muX))
             W = np.dot(RYX, RXinv)

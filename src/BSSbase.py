@@ -77,6 +77,36 @@ class BSSBaseClass:
         w = np.maximum(v - theta, 0)
         return w
 
+    def ProjectRowstoBoundaryRectangle(self, H, BoundMin, BoundMax):
+        Hshape = H.shape
+        a0 = 1-2*(np.sum(H, axis = 0) < 0)*(BoundMin == 0)
+        AA0 = np.diag(np.reshape(a0, (-1,)))
+        H = np.dot(H, AA0)
+        BoundMaxlist = np.dot(np.ones((Hshape[0],1)), BoundMax)
+        BoundMinlist = np.dot(np.ones(( Hshape[0],1)), BoundMin)
+        CheckMin = 1.0*(H > BoundMinlist)
+        a = 1-2.0*(np.sum(CheckMin, axis=0) == 0)*(BoundMin == 0)
+        AA = np.diag(np.reshape(a, (-1,)))
+        H=np.dot(H,AA)
+        CheckMax = 1.0*(H < BoundMaxlist)
+        CheckMin = 1.0*(H > BoundMinlist)
+        H = H*CheckMax*CheckMin+(1-CheckMin)*BoundMinlist+(1-CheckMax)*BoundMaxlist
+        return H
+
+    def ProjectColumnsOntoPracticalPolytope(self, x, signed_dims, nn_dims, sparse_dims_list, max_number_of_iterations = 1):
+        dim = len(signed_dims) + len(nn_dims)
+        BoundMax = np.ones((dim,1)).T
+        BoundMin = -np.ones((dim,1)).T
+        BoundMin[:,nn_dims] = 0
+        x_projected = x.copy()
+        x_projected[signed_dims, :] = np.clip(x_projected[signed_dims, :], -1, 1)
+        x_projected[nn_dims, :] = np.clip(x_projected[nn_dims, :], 0, 1)
+        for kk in range(max_number_of_iterations):
+            for j in range(len(sparse_dims_list)):
+                x_projected = self.ProjectRowstoBoundaryRectangle(x_projected.T, BoundMin, BoundMax).T
+                x_projected[sparse_dims_list[j], :] = self.ProjectRowstoL1NormBall(x_projected[sparse_dims_list[j], :].T).T
+        return x_projected
+
     def CalculateSIR(self, H,pH, return_db = True):
         G=pH@H
         Gmax=np.diag(np.max(abs(G),axis=1))
