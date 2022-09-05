@@ -2,3 +2,7 @@
 *.sh
 *.pkl
 pmfgeneral8.py
+*.out
+BCA_vs_CorInfoMaxDebug
+*.mat
+data/Olshaussen/imagepatcheselfwhitened.mat

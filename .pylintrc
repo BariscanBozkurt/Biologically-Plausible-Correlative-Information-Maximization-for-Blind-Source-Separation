@@ -1,0 +1,76 @@
+[MASTER]
+
+# Add files or directories to the blacklist. They should be base names, not
+# paths.
+ignore=venv
+
+[MESSAGES CONTROL]
+
+# Only show warnings with the listed confidence levels. Leave empty to show
+# all. Valid levels: HIGH, INFERENCE, INFERENCE_FAILURE, UNDEFINED
+confidence=
+
+disable=
+    missing-function-docstring,
+    import-error, # disabled since pre-commit runs pylint in a separate venv
+    unspecified-encoding,
+    fixme,
+    # TODO enable all checks below here over time
+    # Find all checkers at https://pylint.pycqa.org/en/latest/user_guide/checkers/features.html
+    attribute-defined-outside-init,
+    duplicate-code,
+    invalid-name,
+    consider-using-enumerate,
+    expression-not-assigned,        # @Ogulcan Could be that there is some unwanted behavior
+    bare-except,                    # good first task
+    unused-argument,                # good first task
+    undefined-variable,             # good first task
+    too-many-instance-attributes,
+    missing-class-docstring,
+    too-many-locals,
+    missing-module-docstring,
+    pointless-string-statement,
+    dangerous-default-value,
+    too-many-arguments,
+    unidiomatic-typecheck,
+    redefined-outer-name,
+    consider-using-with,
+    unused-variable,                # good first task
+    unused-import,                  # good first task
+    consider-using-f-string,        # good first task
+    chained-comparison,             # good first task
+    consider-using-from-import,     # good first task
+    wrong-import-position,          # good first task
+    inconsistent-return-statements, # good first task
+    no-else-return,                 # good first task
+    too-many-branches,              # good first task
+    consider-using-in,              # good first task
+    import-outside-toplevel,        # good first task
+    too-many-statements,            # good first task
+    self-assigning-variable,        # good first task
+    use-list-literal,               # good first task
+    no-value-for-parameter,         # good first task
+    logging-fstring-interpolation,  # good first task
+    too-many-return-statements,     # good first task
+    undefined-loop-variable,        # important
+    too-few-public-methods,
+    cell-var-from-loop,
+    protected-access,
+    bad-classmethod-argument,
+    too-many-function-args,
+    use-maxsplit-arg,
+    line-too-long,
+    broad-except,
+    unnecessary-lambda,
+
+[FORMAT]
+
+# Maximum number of characters on a single line.
+max-line-length=120
+
+# Good variable names which should always be accepted, separated by a comma
+# fs is the default fixture name for the pyfakefs pytest plugin
+# s3 is just the s3 bucket
+# df is the pandas dataframe
+# x and y are commonly used for x and y coordinates
+good-names=i, j, k, ex, Run,_ , fs, s3, df, x, y, x0, x1, x2, y0, y1, y2

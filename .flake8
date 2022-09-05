@@ -1,0 +1,65 @@
+[flake8]
+max-line-length = 120
+
+extend-ignore = E203  # Ignore "whitespace before ':'" because it conflicts with black
+                W503  # Ignore "line break before binary operator" becaus it conflicts with black
+# TODO enable all checks below here over time
+# See all error code at https://flake8.pycqa.org/en/latest/user/error-codes.html
+                E722
+                F405
+                F821
+                E262
+                E265
+                E266
+                E402
+                PT018  # Pytest related (good first task)
+                F841   # Unused variable (good first task)
+                E501   # Line lenght (good first task)
+                C408
+                B001
+                B006
+                B007   # Unused variable in loop (good first task)
+                B008
+                B023
+                PL118  # Pathlib usage (good first task)
+                PL123  # Pathlib usage (good first task)
+                PL107  # Pathlib usage (good first task)
+                PL103  # Pathlib usage (good first task)
+                PL110  # Pathlib usage (good first task)
+                PL117  # Pathlib usage (good first task)
+
+# Flake8 config for Jupyter notebooks
+[flake8_nb]
+max-line-length = 120
+
+extend-ignore = E203  # Ignore "whitespace before ':'" because it conflicts with black
+                W503  # Ignore "line break before binary operator" becaus it conflicts with black
+# TODO enable all checks below here over time
+# See all error code at https://flake8.pycqa.org/en/latest/user/error-codes.html
+                E722
+                F405
+                F821
+                E262
+                E265
+                E266
+                E402
+                E714   # not is -> is not (good first task)
+                E741   # variable names (important)
+                PT018  # Pytest related (good first task)
+                E703   # Semicolon (good first task)
+                E501   # Line lenght (good first task)
+                F841   # Unused variable (good first task)
+                F541   # Missing f-string (good first task)
+                C408
+                B001
+                B006
+                B007   # Unused variable in loop (good first task)
+                B008
+                B023
+                PL118  # Pathlib usage (good first task)
+                PL123  # Pathlib usage (good first task)
+                PL107  # Pathlib usage (good first task)
+                PL103  # Pathlib usage (good first task)
+                PL110  # Pathlib usage (good first task)
+                PL117  # Pathlib usage (good first task)
+                PT023  # Pytest annotation (good first task)
