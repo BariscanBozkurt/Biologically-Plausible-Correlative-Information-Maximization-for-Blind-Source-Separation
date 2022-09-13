@@ -6,3 +6,11 @@ pmfgeneral8.py
 BCA_vs_CorInfoMaxDebug
 *.mat
 data/Olshaussen/imagepatcheselfwhitened.mat
+Simulations/VideoSeparation/Original-Videos/BIRD.mp4
+Simulations/VideoSeparation/Original-Videos/GUITAR.mp4
+Simulations/VideoSeparation/Original-Videos/SHIP.mp4
+Simulations/VideoSeparation/Frames/*
+Simulations/VideoSeparation/Mix-Videos/*
+Simulations/VideoSeparation/Separated-Videos/*
+Simulations/VideoSeparation/Seperated-Videos/*
+Simulations/VideoSeparation/FINAL.avi

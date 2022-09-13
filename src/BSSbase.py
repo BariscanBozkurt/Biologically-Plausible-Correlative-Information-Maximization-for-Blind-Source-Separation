@@ -238,3 +238,18 @@ class BSSBaseClass:
         """
         perm = self.find_permutation_between_source_and_estimation(S, Y)
         return (np.sign((Y[perm, :] * S).sum(axis=1))[:, np.newaxis]) * Y[perm, :]
+
+    def find_permutation_between_source_and_estimationV2(self, S, Y):
+        """
+        S    : Original source matrix
+        Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+
+        return the permutation of the source seperation algorithm
+        """
+        number_of_sources = S.shape[0]
+        perm = np.argmax(np.corrcoef(S, Y)[number_of_sources:,:number_of_sources],axis=0)
+        return perm
+
+    def signed_and_permutation_corrected_sourcesV2(self, S, Y):
+        perm = self.find_permutation_between_source_and_estimationV2(S, Y)
+        return (np.sign((Y[perm, :] * S).sum(axis=1))[:, np.newaxis]) * Y[perm, :]

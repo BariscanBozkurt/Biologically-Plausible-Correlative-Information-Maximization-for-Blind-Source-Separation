@@ -1993,7 +1993,7 @@ class OnlineCorInfoMaxOlshaussen(OnlineCorInfoMax):
 
                 y_old = y.copy()
                 e = yke - y
-                grady = gamy * By @ y + game * Be @ e
+                grady = gamy * By @ y + game * (Be.T[0] * e)
                 a = y + mu_y * (grady)
 
                 y = np.maximum(a - STLAMBD, 0)
@@ -2326,6 +2326,90 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
         self.W = W
         self.By = By
         self.Be = Be
+
+class CorInfoMaxVideoSeparation(OnlineCorInfoMax):
+    
+    def seperate_videos(self, Wf_list, X, imsize = [360, 640], n_pixel_per_frame=5, 
+                        n_iter = 1000000, neural_dynamic_iterations = 250, 
+                        neural_lr_start = 0.9, neural_lr_stop = 1e-3, 
+                        neural_loop_lr_rule="divide_by_loop_index",
+                        neural_lr_decay_multiplier=0.005,
+                        use_error_corr_structured_connectivity=False,
+                        shuffle=False,
+                        debug_iteration_point=1000,
+                        plot_in_jupyter=False,):
+        
+        lambday, lambdae, muW, gamy, game, W, By, Be = (
+            self.lambday,
+            self.lambdae,
+            self.muW,
+            self.gamy,
+            self.game,
+            self.W,
+            self.By,
+            self.Be,
+        )        
+        neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
+        debugging = self.set_ground_truth
+        number_of_mixtures = X.shape[1]
+        number_of_frames = X.shape[0]
+
+        
+        samples = X.shape[2]
+                
+        if debugging:
+            SIRlist = []
+            A = self.A
+            
+        sample_counter = 0
+        for i_sample in tqdm(range(n_iter)):
+            x_current = X[np.mod(sample_counter // n_pixel_per_frame, 10),:, np.random.randint(samples)]
+            y = np.zeros(self.s_dim)
+
+            y = self.run_neural_dynamics_nnantisparse(
+                                                    x_current,
+                                                    y,
+                                                    W,
+                                                    By,
+                                                    Be,
+                                                    gamy,
+                                                    game,
+                                                    lr_start=neural_lr_start,
+                                                    lr_stop=neural_lr_stop,
+                                                    lr_rule=neural_loop_lr_rule,
+                                                    lr_decay_multiplier=neural_lr_decay_multiplier,
+                                                    neural_dynamic_iterations=neural_dynamic_iterations,
+                                                    neural_OUTPUT_COMP_TOL=neural_dynamic_tol,
+                                                )
+
+            e = y - W @ x_current
+
+            W = W + muW * np.outer(e, x_current)
+
+            z = By @ y
+            By = (1/lambday) * (By - gamy * np.outer(z, z))
+            
+            if debugging:
+                if (i_sample % debug_iteration_point) == 0:
+                    self.W = W
+                    self.By = By
+                    self.Be = Be
+                    Wf = self.compute_overall_mapping(return_mapping = True)
+                    Wf_list.append(Wf)
+                    SIR = self.CalculateSIR(A, Wf)[0]
+                    SIRlist.append(SIR)
+                    self.SIR_list = SIRlist
+                    if plot_in_jupyter:
+                        pl.clf()
+                        pl.plot(np.array(SIRlist), linewidth = 3)
+                        pl.xlabel("Number of Iterations / {}".format(debug_iteration_point), fontsize = 15)
+                        pl.ylabel("SIR (dB)", fontsize = 15)
+                        pl.title("SIR Behaviour", fontsize = 15)
+                        pl.grid()
+                        clear_output(wait=True)
+                        display(pl.gcf())   
+            sample_counter += 1
+        return X
 
 ######## BELOW CLASSES ARE FOR EXPERIMENTAL PURPOSES.DO NOT TAKE THEM SERIOUS FOR NOW.
 ######## THESE ARE STILL UNDER DEVELOPMENT.

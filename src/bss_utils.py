@@ -30,11 +30,24 @@ def find_permutation_between_source_and_estimation(S, Y):
     )
     return perm
 
+def find_permutation_between_source_and_estimationV2(S, Y):
+    """
+    S    : Original source matrix
+    Y    : Matrix of estimations of sources (after BSS or ICA algorithm)
+
+    return the permutation of the source seperation algorithm
+    """
+    number_of_sources = S.shape[0]
+    perm = np.argmax(np.corrcoef(S, Y)[number_of_sources:,:number_of_sources],axis=0)
+    return perm
 
 def signed_and_permutation_corrected_sources(S, Y):
     perm = find_permutation_between_source_and_estimation(S, Y)
     return (np.sign((Y[perm, :] * S).sum(axis=1))[:, np.newaxis]) * Y[perm, :]
 
+def signed_and_permutation_corrected_sourcesV2(S, Y):
+    perm = find_permutation_between_source_and_estimationV2(S, Y)
+    return (np.sign((Y[perm, :] * S).sum(axis=1))[:, np.newaxis]) * Y[perm, :]
 
 ########### PROJECTION AND NORMALIZATION FUNCTIONS #####################
 def ZeroOneNormalizeData(data):
@@ -250,6 +263,44 @@ def evaluate_bss(W, Y, A, S, mean_normalize_estimations=False):
 
     return SINR, SNR, SGG, Y_, P
 
+def evaluate_bssV2(W, Y, A, S, mean_normalize_estimations=False):
+    """_summary_
+
+    Args:
+        W (numpy array): Trained separator matrix (from a BSS algorithm)
+        Y (numpy array): Estimated source vectors by BSS algorithm (of shape (NumberofSources, NumberofSamples))
+        A (numpy array): Ground Truth Mixing Matrix
+        S (numpy array): Ground Truth Source Vectors (if it is given as mean centered, then pass mean_normalize_estimations = True)
+        mean_normalize_estimations (bool, optional): Whether to mean center the source estimation matrix Y or not. Defaults to False.
+
+    Returns:
+        SINR (float): Signal-to-Interference-plus-Noise-Ratio
+        SNR (numpy array): Signal-to-Noise-Ratio for each source (rows of S are the ground truth source vectors)
+
+    """
+    s_dim = S.shape[0]
+    if mean_normalize_estimations:
+        Y = Y - Y.mean(axis=1, keepdims=True)
+    Y_ = signed_and_permutation_corrected_sourcesV2(S, Y)
+    coef_ = ((Y_ * S).sum(axis=1) / (Y_ * Y_).sum(axis=1)).reshape(-1, 1)
+    Y_ = coef_ * Y_
+
+    SINR = 10 * np.log10(CalculateSINRjit(Y_, S, False)[0])
+    SNR = snr_jit(S, Y_)
+
+    T = W @ A
+    Tabs = np.abs(T)
+    P = np.zeros((s_dim, s_dim))
+
+    for SourceIndex in range(s_dim):
+        Tmax = np.max(Tabs[SourceIndex, :])
+        Tabs[SourceIndex, :] = Tabs[SourceIndex, :] / Tmax
+        P[SourceIndex, :] = Tabs[SourceIndex, :] > 0.999
+
+    GG = P.T @ T
+    _, SGG, _ = np.linalg.svd(GG)  # SGG is the singular values of overall matrix Wf @ A
+
+    return SINR, SNR, SGG, Y_, P
 ############# SYNTHETIC DATA AND LINEAR MIXING FUNCTIONS #################
 def generate_correlated_uniform_sources(
     R, range_=[-1, 1], n_sources=5, size_sources=500000

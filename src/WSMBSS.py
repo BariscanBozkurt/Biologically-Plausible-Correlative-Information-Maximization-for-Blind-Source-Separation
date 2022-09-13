@@ -239,6 +239,36 @@ class OnlineWSMBSS(BSSBaseClass):
 
         return SINR, SNR, SGG, Y_, P
 
+    def evaluate_for_debugV2(self, W, A, S, X, mean_normalize_estimation=False):
+
+        s_dim = self.s_dim
+        Y_ = W @ X
+        if mean_normalize_estimation:
+            Y_ = Y_ - Y_.mean(axis=1).reshape(-1, 1)
+        # Y_ = self.signed_and_permutation_corrected_sources(S, Y_)
+        Y_ = self.signed_and_permutation_corrected_sourcesV2(S, Y_)
+        coef_ = ((Y_ * S).sum(axis=1) / (Y_ * Y_).sum(axis=1)).reshape(-1, 1)
+        Y_ = coef_ * Y_
+
+        SINR = 10 * np.log10(self.CalculateSINRjit(Y_, S, False)[0])
+        SNR = self.snr_jit(S, Y_)
+
+        T = W @ A
+        Tabs = np.abs(T)
+        P = np.zeros((s_dim, s_dim))
+
+        for SourceIndex in range(s_dim):
+            Tmax = np.max(Tabs[SourceIndex, :])
+            Tabs[SourceIndex, :] = Tabs[SourceIndex, :] / Tmax
+            P[SourceIndex, :] = Tabs[SourceIndex, :] > 0.999
+
+        GG = P.T @ T
+        _, SGG, _ = np.linalg.svd(
+            GG
+        )  # SGG is the singular values of overall matrix Wf @ A
+
+        return SINR, SNR, SGG, Y_, P
+
     def plot_for_debug(
         self, SIR_list, SNR_list, D1list, D2list, P, debug_iteration_point, YforPlot
     ):
@@ -489,6 +519,7 @@ class OnlineWSMBSS(BSSBaseClass):
         lr_rule,
         lr_decay_multiplier=0.01,
         hidden_layer_gain=2,
+        neural_fast_start = False,
         OUTPUT_COMP_TOL=1e-7,
     ):
         """_summary_
@@ -519,6 +550,19 @@ class OnlineWSMBSS(BSSBaseClass):
                 return A - np.diag(diag), diag
             else:
                 return A - np.diag(diag)
+
+        if neural_fast_start:
+            # Mapping from xt -> ht
+            A = (1 - zeta) * (
+                beta * ((D1 * M_H) * D1.T)
+                + (1 - beta) * (M_H - W_YH.T @ np.linalg.solve(M_Y, W_YH))
+            )
+            b = (1 - zeta) * beta * (D1 * W_HX)
+            WL1 = np.linalg.solve(A, b)
+            # Mapping from ht -> yt
+            WL2 = np.linalg.solve(M_Y * D2.T, W_YH)
+            h = WL1 @ x_current
+            y = WL2 @ h
 
         M_hat_H, Gamma_H = offdiag(M_H, True)
         M_hat_Y, Gamma_Y = offdiag(M_Y, True)
@@ -591,6 +635,7 @@ class OnlineWSMBSS(BSSBaseClass):
         lr_decay_multiplier=0.01,
         hidden_layer_gain=2,
         use_hopfield=True,
+        neural_fast_start = False,
         OUTPUT_COMP_TOL=1e-7,
     ):
         """_summary_
@@ -628,6 +673,18 @@ class OnlineWSMBSS(BSSBaseClass):
                 return A - np.diag(diag), diag
             else:
                 return A - np.diag(diag)
+        if neural_fast_start:
+            # Mapping from xt -> ht
+            A = (1 - zeta) * (
+                beta * ((D1 * M_H) * D1.T)
+                + (1 - beta) * (M_H - W_YH.T @ np.linalg.solve(M_Y, W_YH))
+            )
+            b = (1 - zeta) * beta * (D1 * W_HX)
+            WL1 = np.linalg.solve(A, b)
+            # Mapping from ht -> yt
+            WL2 = np.linalg.solve(M_Y * D2.T, W_YH)
+            h = WL1 @ x_current
+            y = WL2 @ h
 
         M_hat_H, Gamma_H = offdiag(M_H, True)
         M_hat_Y, Gamma_Y = offdiag(M_Y, True)
@@ -900,6 +957,7 @@ class OnlineWSMBSS(BSSBaseClass):
         lr_decay_multiplier=0.005,
         stlambd_lr=0.01,
         hidden_layer_gain=25,
+        neural_fast_start = False,
         OUTPUT_COMP_TOL=1e-7,
     ):
         def offdiag(A, return_diag=False):
@@ -917,6 +975,19 @@ class OnlineWSMBSS(BSSBaseClass):
                 return A - np.diag(diag), diag
             else:
                 return A - np.diag(diag)
+
+        if neural_fast_start:
+            # Mapping from xt -> ht
+            A = (1 - zeta) * (
+                beta * ((D1 * M_H) * D1.T)
+                + (1 - beta) * (M_H - W_YH.T @ np.linalg.solve(M_Y, W_YH))
+            )
+            b = (1 - zeta) * beta * (D1 * W_HX)
+            WL1 = np.linalg.solve(A, b)
+            # Mapping from ht -> yt
+            WL2 = np.linalg.solve(M_Y * D2.T, W_YH)
+            h = WL1 @ x_current
+            y = WL2 @ h
 
         M_hat_H, Gamma_H = offdiag(M_H, True)
         M_hat_Y, Gamma_Y = offdiag(M_Y, True)
@@ -1208,6 +1279,7 @@ class OnlineWSMBSS(BSSBaseClass):
         neural_lr_stop=0.05,
         synaptic_lr_rule="divide_by_log_index",
         neural_loop_lr_rule="divide_by_slow_loop_index",
+        neural_fast_start = False,
         synaptic_lr_decay_divider=5000,
         neural_lr_decay_multiplier=0.005,
         hidden_layer_gain=10,
@@ -1327,6 +1399,7 @@ class OnlineWSMBSS(BSSBaseClass):
                     lr_rule=neural_loop_lr_rule,
                     lr_decay_multiplier=neural_lr_decay_multiplier,
                     hidden_layer_gain=hidden_layer_gain,
+                    neural_fast_start = neural_fast_start,
                     OUTPUT_COMP_TOL=neural_OUTPUT_COMP_TOL,
                 )
 
@@ -1499,6 +1572,7 @@ class OnlineWSMBSS(BSSBaseClass):
         neural_lr_stop=0.05,
         synaptic_lr_rule="divide_by_log_index",
         neural_loop_lr_rule="divide_by_slow_loop_index",
+        neural_fast_start = False,
         synaptic_lr_decay_divider=5000,
         neural_lr_decay_multiplier=0.005,
         hidden_layer_gain=10,
@@ -1614,6 +1688,7 @@ class OnlineWSMBSS(BSSBaseClass):
                     lr_rule=neural_loop_lr_rule,
                     lr_decay_multiplier=neural_lr_decay_multiplier,
                     hidden_layer_gain=hidden_layer_gain,
+                    neural_fast_start = neural_fast_start,
                     OUTPUT_COMP_TOL=neural_OUTPUT_COMP_TOL,
                 )
 
@@ -1627,28 +1702,28 @@ class OnlineWSMBSS(BSSBaseClass):
                     MU_MH = np.max(
                         [
                             gammaM_start[0]
-                            / (1 + np.log(2 + (i_sample // synaptic_lr_decay_divider))),
+                            / (1 + np.log(1 + (i_sample // synaptic_lr_decay_divider))/10),
                             gammaM_stop[0],
                         ]
                     )
                     MU_MY = np.max(
                         [
                             gammaM_start[1]
-                            / (1 + np.log(2 + (i_sample // synaptic_lr_decay_divider))),
+                            / (1 + np.log(1 + (i_sample // synaptic_lr_decay_divider))/10),
                             gammaM_stop[1],
                         ]
                     )
                     MU_WHX = np.max(
                         [
                             gammaW_start[0]
-                            / (1 + np.log(2 + (i_sample // synaptic_lr_decay_divider))),
+                            / (1 + np.log(1 + (i_sample // synaptic_lr_decay_divider))/10),
                             gammaW_stop[0],
                         ]
                     )
                     MU_WYH = np.max(
                         [
                             gammaW_start[1]
-                            / (1 + np.log(2 + (i_sample // synaptic_lr_decay_divider))),
+                            / (1 + np.log(1 + (i_sample // synaptic_lr_decay_divider))/10),
                             gammaW_stop[1],
                         ]
                     )
@@ -1699,7 +1774,7 @@ class OnlineWSMBSS(BSSBaseClass):
                                 SGG,
                                 Y_,
                                 P,
-                            ) = self.evaluate_for_debug(W, A, S, X, False)
+                            ) = self.evaluate_for_debugV2(W, A, S, X, False)
 
                             self.SV_list.append(abs(SGG))
 
@@ -2209,7 +2284,7 @@ class OnlineWSMBSS(BSSBaseClass):
                                 Y_,
                                 P,
                             ) = self.evaluate_for_debug(
-                                W, A, Szeromean, X, mean_normalize_estimation=True
+                                W, A, S, X, mean_normalize_estimation=False
                             )
 
                             self.SV_list.append(abs(SGG))
@@ -2274,6 +2349,7 @@ class OnlineWSMBSS(BSSBaseClass):
         stlambd_lr=0.05,
         synaptic_lr_rule="divide_by_log_index",
         neural_loop_lr_rule="divide_by_slow_loop_index",
+        neural_fast_start = False,
         synaptic_lr_decay_divider=5000,
         neural_lr_decay_multiplier=0.005,
         hidden_layer_gain=25,
@@ -2390,6 +2466,7 @@ class OnlineWSMBSS(BSSBaseClass):
                     lr_decay_multiplier=neural_lr_decay_multiplier,
                     stlambd_lr=stlambd_lr,
                     hidden_layer_gain=hidden_layer_gain,
+                    neural_fast_start=neural_fast_start,
                     OUTPUT_COMP_TOL=neural_OUTPUT_COMP_TOL,
                 )
                 if synaptic_lr_rule == "constant":
