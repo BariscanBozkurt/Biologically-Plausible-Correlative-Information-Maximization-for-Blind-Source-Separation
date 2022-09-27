@@ -15,6 +15,7 @@ from numba_utils import *
 from LDMIBSS import LDMIBSS
 from CorInfoMaxBSS import OnlineCorInfoMax
 from PMF import PMFv2
+from WSMBSS import OnlineWSMBSS
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -128,6 +129,83 @@ for iter1 in range(NumAverages): ## Loop over number of averages
                                 'execution_time' : None}
 
         #######################################################
+        #        Online WSM Setup                             #
+        #######################################################
+        try: # Try Except for SVD did not converge error (or for any other error)
+            MUS = 0.25
+            WSM_INPUT_STD = 0.5
+            gammaM_start = [MUS, MUS]
+            gammaM_stop = [1e-3, 1e-3]
+            gammaW_start = [MUS, MUS]
+            gammaW_stop = [1e-3, 1e-3]
+
+            OUTPUT_COMP_TOL = 1e-5
+            MAX_OUT_ITERATIONS = 3000
+            LayerGains = [8, 1]
+            LayerMinimumGains = [1e-6, 1]
+            LayerMaximumGains = [1e6, 1.001]
+            WScalings = [0.0033, 0.0033]
+            GamScalings = [0.02, 0.02]
+            zeta = 1e-4
+            beta = 0.5
+            muD = [20, 1e-2]
+
+            s_dim = S.shape[0]
+            x_dim = X.shape[0]
+            h_dim = s_dim
+            samples = S.shape[1]
+
+
+            modelWSM = OnlineWSMBSS(
+                                    s_dim=s_dim,
+                                    x_dim=x_dim,
+                                    h_dim=h_dim,
+                                    gammaM_start=gammaM_start,
+                                    gammaM_stop=gammaM_stop,
+                                    gammaW_start=gammaW_start,
+                                    gammaW_stop=gammaW_stop,
+                                    beta=beta,
+                                    zeta=zeta,
+                                    muD=muD,
+                                    WScalings=WScalings,
+                                    DScalings=LayerGains,
+                                    LayerMinimumGains=LayerMinimumGains,
+                                    LayerMaximumGains=LayerMaximumGains,
+                                    neural_OUTPUT_COMP_TOL=OUTPUT_COMP_TOL,
+                                    set_ground_truth=True,
+                                    S=S,
+                                    A=A,
+                                )
+            XnoisyWSM = (WSM_INPUT_STD * (Xnoisy / Xnoisy.std(1)[:,np.newaxis]))
+            with Timer() as t:
+                modelWSM.fit_batch_nnsparse(
+                                            XnoisyWSM,
+                                            n_epochs=1,
+                                            neural_lr_start=0.5,
+                                            neural_lr_stop=0.2,
+                                            synaptic_lr_decay_divider=1,
+                                            debug_iteration_point=debug_iteration_point,
+                                            plot_in_jupyter=False,
+                                        )
+            ######### Evaluate the Performance of WSM Framework ###########################
+            SINRlistWSM = modelWSM.SIR_list
+            WfWSM = modelWSM.compute_overall_mapping(return_mapping = True)
+            YWSM = WfWSM @ XnoisyWSM
+            SINRWSM, SNRWSM, _, _, _ = evaluate_bss(WfWSM, YWSM, A, S, mean_normalize_estimations = False)
+            
+            WSM_Dict = {'SNRlevel' : SNRlevel, 'trial' : trial, 'seed' : seed_, 'Model' : 'WSM',
+                        'SINR' : SINRWSM, 'SINRlist':  SINRlistWSM, 'SNR' : SNRWSM,
+                        'S' : None, 'A' : None, 'X': None, 'Wf' : WfWSM, 'SNRinp' : None, 
+                        'execution_time' : t.interval}
+
+        except Exception as e:
+            print(str(e))
+            WSM_Dict = {'SNRlevel' : SNRlevel, 'trial' : trial, 'seed' : seed_, 'Model' : 'WSM',
+                        'SINR' : -999, 'SINRlist':  str(e), 'SNR' : None,
+                        'S' : None, 'A' : None, 'X': None, 'Wf' : None, 'SNRinp' : None, 
+                        'execution_time' : None}
+
+        #######################################################
         #                 LDMI BATCH                          #
         #######################################################
         try:
@@ -195,6 +273,7 @@ for iter1 in range(NumAverages): ## Loop over number of averages
 
 
         RESULTS_DF = RESULTS_DF.append(CorInfoMax_Dict, ignore_index = True)
+        RESULTS_DF = RESULTS_DF.append(WSM_Dict, ignore_index = True)
         RESULTS_DF = RESULTS_DF.append(LDMI_Dict, ignore_index = True)
         RESULTS_DF = RESULTS_DF.append(PMF_Dict, ignore_index = True)
         RESULTS_DF.to_pickle(os.path.join("../Results", pickle_name_for_results))

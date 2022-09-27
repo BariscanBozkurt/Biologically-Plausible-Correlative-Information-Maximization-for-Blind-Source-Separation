@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 if not os.path.exists("../Results"):
     os.mkdir("../Results")
 
-pickle_name_for_results = "simulation_results_muWSelection.pkl"
+pickle_name_for_results = "simulation_results_muWSelectionV1.pkl"
 
 N = 500000 ## Number of data points
 NumberofSources = 5 ## Number of source vectors

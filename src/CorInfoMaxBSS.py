@@ -2159,6 +2159,7 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
         game,
         lr_start=0.9,
         lr_stop=1e-15,
+        lambda_Lagrangian=None,
         lagrangian_lambd_lr = 0.01,
         lr_rule="divide_by_loop_index",
         lr_decay_multiplier=0.01,
@@ -2166,7 +2167,8 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
         neural_OUTPUT_COMP_TOL=1e-7,        
     ):
         yke = np.dot(W, x)
-        lambda_Lagrangian = np.zeros(Apoly.shape[0])
+        if lambda_Lagrangian is None:
+            lambda_Lagrangian = np.zeros(Apoly.shape[0])
         for j in range(neural_dynamic_iterations):
             # mu_y = max(lr_start / (j + 1), lr_stop)
             if lr_rule == "constant":
@@ -2183,7 +2185,7 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
             lambda_Lagrangian = np.maximum(lambda_Lagrangian + lagrangian_lambd_lr * (Apoly @ y - bpoly), 0)
             if np.linalg.norm(y - y_old) < neural_OUTPUT_COMP_TOL * np.linalg.norm(y):
                 break
-        return y
+        return y, lambda_Lagrangian
 
     def fit_batch(
         self,
@@ -2195,6 +2197,7 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
         neural_lr_start=0.9,
         neural_lr_stop=1e-15,
         lagrangian_lambd_lr = 0.01,
+        use_previous_lagrangian_lambd=False,
         synaptic_lr_rule="constant",
         synaptic_lr_decay_divider=5000,
         neural_loop_lr_rule="divide_by_loop_index",
@@ -2215,6 +2218,7 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
             self.By,
             self.Be,
         )
+        lambda_Lagrangian = None
         neural_dynamic_tol = self.neural_OUTPUT_COMP_TOL
         debugging = self.set_ground_truth
         SIR_list = self.SIR_list
@@ -2245,25 +2249,29 @@ class OnlineCorInfoMaxCanonical(OnlineCorInfoMax):
                 y = np.zeros(self.s_dim)
 
                 # Output recurrent weights
-                y = self.run_neural_dynamics(
-                    x_current,
-                    y,
-                    Apoly,
-                    bpoly,
-                    W,
-                    By,
-                    Be,
-                    gamy,
-                    game,
-                    lr_start=neural_lr_start,
-                    lr_stop=neural_lr_stop,
-                    lagrangian_lambd_lr=lagrangian_lambd_lr,
-                    lr_rule=neural_loop_lr_rule,
-                    lr_decay_multiplier=neural_lr_decay_multiplier,
-                    neural_dynamic_iterations=neural_dynamic_iterations,
-                    neural_OUTPUT_COMP_TOL=neural_dynamic_tol,
-                )
+                y,lambda_Lagrangian_ = self.run_neural_dynamics(
+                                                                x_current,
+                                                                y,
+                                                                Apoly,
+                                                                bpoly,
+                                                                W,
+                                                                By,
+                                                                Be,
+                                                                gamy,
+                                                                game,
+                                                                lr_start=neural_lr_start,
+                                                                lr_stop=neural_lr_stop,
+                                                                lambda_Lagrangian=lambda_Lagrangian,
+                                                                lagrangian_lambd_lr=lagrangian_lambd_lr,
+                                                                lr_rule=neural_loop_lr_rule,
+                                                                lr_decay_multiplier=neural_lr_decay_multiplier,
+                                                                neural_dynamic_iterations=neural_dynamic_iterations,
+                                                                neural_OUTPUT_COMP_TOL=neural_dynamic_tol,
+                                                            )
 
+                if use_previous_lagrangian_lambd:
+                    lambda_Lagrangian = lambda_Lagrangian_
+                    
                 e = y - W @ x_current
 
                 if synaptic_lr_rule == "constant":

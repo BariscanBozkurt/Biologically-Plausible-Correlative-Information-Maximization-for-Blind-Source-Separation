@@ -32,7 +32,7 @@ x_dim = NumberofMixtures
 SNRlevel = 30 ## Signal to noise ratio in terms of dB (for adding noise to the mixtures)
 Be_gain_list = [1000, 2000, 5000, 10000]
 NumAverages = 50 ## Number of realizations to average for each algorithm
-seed_list = np.array([1436847 * i for i in range(NumAverages)]) ## Seeds for reproducibility
+seed_list = np.array([1436852 * i for i in range(NumAverages)]) ## Seeds for reproducibility
 ########################################################################################
 ########################################################################################
 ###                                                                                  ###

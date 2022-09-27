@@ -59,7 +59,7 @@ for ii in range(df_anti_results.shape[0]):
     X = (WSM_INPUT_STD * (X / X.std(1)[:,np.newaxis]))
 
     #######################################################
-    #        Online CorInfoMax Setup 1                    #
+    #        WSM Setup                                    #
     #######################################################
     try: # Try Except for SVD did not converge error (or for any other error)
         if rho > 0.4:

@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 if not os.path.exists("../Results"):
     os.mkdir("../Results")
 
-pickle_name_for_results = "simulation_results_Be_Initialization.pkl"
+pickle_name_for_results = "simulation_results_Be_InitializationV1.pkl"
 
 N = 500000 ## Number of data points
 NumberofSources = 5 ## Number of source vectors
@@ -32,7 +32,7 @@ x_dim = NumberofMixtures
 SNRlevel = 30 ## Signal to noise ratio in terms of dB (for adding noise to the mixtures)
 Be_gain_list = [1000, 2000, 5000, 10000]
 NumAverages = 50 ## Number of realizations to average for each algorithm
-seed_list = np.array([1436857 * i for i in range(NumAverages)]) ## Seeds for reproducibility
+seed_list = np.array([1436852 * i for i in range(NumAverages)]) ## Seeds for reproducibility
 ########################################################################################
 ########################################################################################
 ###                                                                                  ###
