@@ -82,19 +82,21 @@ This file includes the jupyter notebook experiments of the algorithms CorInfoMax
 ## Simulations
 Each simulation presented in the paper can be reproduced using the codes in this folder.
 
-* AntisparseCorrelated                  : (Signed) antisparse source separation simulations
-* NonnegativeAntisparseCorrelated       : Nonnegative antisparse source separation simulations
-* SparseNoisy                           : Sparse source separation simulations
-* NNSparseNoisy                         : Nonnegative sparse source separation simulations
-* SimplexNoisy                          : Simplex source separation simulations
-* SparseDictionaryLearning              : Sparse dictionary learning experiment
-* General_Polytope                      : A BSS simulation on a 5-dimensional identifiable polytope presented in the paper
-* VideoSeparation                       : Video separation demo code
-* ImageSeparation                       : Image separation demo (not presented in the paper)
-* 4PAM_DigitalComm                      : A BSS simulation setting with 4PAM digital communication signals
-* AblationStudies                       : Ablation studies on hyperparameter selections
+Simulation Folder  |  Explanation
+:-------------------------:|:-------------------------:
+AntisparseCorrelated                  | (Signed) antisparse source separation simulations
+NonnegativeAntisparseCorrelated       | Nonnegative antisparse source separation simulations
+SparseNoisy                           | Sparse source separation simulations
+NNSparseNoisy                         | Nonnegative sparse source separation simulations
+SimplexNoisy                          | Simplex source separation simulations
+SparseDictionaryLearning              | Sparse dictionary learning experiment
+General_Polytope                      | A BSS simulation on a 5-dimensional identifiable polytope presented in the paper
+VideoSeparation                       | Video separation demo code
+ImageSeparation                       | Image separation demo (not presented in the paper)
+4PAM_DigitalComm                      | A BSS simulation setting with 4PAM digital communication signals
+AblationStudies                       | Ablation studies on hyperparameter selections
 
-* AnalyzeSimulationResultsFinal         : Producing the plots and table for simulation results
+AnalyzeSimulationResultsFinal         | Producing the plots and table for simulation results
 
 # References
 
