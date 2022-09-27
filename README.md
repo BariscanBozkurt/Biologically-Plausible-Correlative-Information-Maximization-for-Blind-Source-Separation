@@ -1,6 +1,6 @@
 # Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation
 
-This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks, which is submitted to ICLR 2023.
+This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks, which is submitted to ICLR 2023. All the codes are written in Python 3.
 
 ## CorInfoMax Neural Networks
 
@@ -24,4 +24,14 @@ All the simulation codes for the paper manuscript are included inside the folder
 
  * The jupyter notebook "Simulations/AnalyzeSimulationResultsFinal/PlotSimulationResults_GeneralPoly.ipynb" reads the above pickle files and visualize the results. Moreover, the performances of the baseline algorithms are also reported.
 
-To replicate each simulation in the paper, you can adapt the above procedure for the other sections. The experiment procedure for video separation is included in "Simulations/VideoSeparation" as a separate readme file. 
+To replicate each simulation in the paper, you can adapt the above procedure for the other sections (for antisparse, sparse, and simplex BSS simulations). The experiment procedure for video separation is included in "Simulations/VideoSeparation" as a separate readme file. The sparse dictionary learning experiment is located in "Simulations/SparseDictionaryLearning", and the notebook inside this folder produces the sparse receptive fields from prewhitened Olshaussen's image pathces (you need "imagepatcheselfwhitened.mat" file whereas it is not included here due to its file size).
+
+# Python Version and Dependencies
+
+* Python Version: Python 3.8.12
+
+* pip version : 21.2.4
+
+* Required Python Packages: Specified in requirements.txt file.
+
+* Platform Info : "OS: Linux (x86_64-pc-linux-gnu) CPU: Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"
