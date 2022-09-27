@@ -40,8 +40,9 @@ To replicate each simulation in the paper, you can adapt the above procedure for
 
 ## src
 This file is the source code for each BSS algorithm we used in the paper. The following is the full list.
-
-* BSSbase.py            : Base class for blind source separation algorithms
+<!-- Python Script  |  Explanation
+:-------------------------:|:-------------------------:
+* BSSbase.py            | Base class for blind source separation algorithms
 * CorInfoMaxBSS.py      : Our proposed correlative information maximization (framework) neural networks 
 * BCA.py                : Biologically plausible online bounded component analysis (BCA) [1] implementation
 * WSMBSS.py             : Implementation of Weighted similarity mathcing-based (WSM) determinant maximization neural networks for blind separation of correlated sources [2]
@@ -55,7 +56,25 @@ This file is the source code for each BSS algorithm we used in the paper. The fo
 * polytope_utils.py     : Utility functions for polytope operations
 * visualization_utils.py: Utility functions for visualizations
 * numba_utils.py        : Utility functions using numba library of Python
-* general_utils.py      : Other utility functions
+* general_utils.py      : Other utility functions -->
+
+Python Script  |  Explanation
+:-------------------------:|:-------------------------:
+BSSbase.py            | Base class for blind source separation algorithms
+CorInfoMaxBSS.py      | Our proposed correlative information maximization (framework) neural networks 
+BCA.py                | Biologically plausible online bounded component analysis (BCA) [1] implementation
+WSMBSS.py             | Implementation of Weighted similarity mathcing-based (WSM) determinant maximization neural networks for blind separation of correlated sources [2]
+BSMBSS.py             | Implementation Bounded similarity matching (BSM) for uncorrelated antisparse sources [3]
+NSMBSS.py             | Implementation of Nonnegative similarity matching (NSM) for uncorrelated nonnegative sources [4]
+LDMIBSS.py            | Implementation of Log-det (LD-) Mutual Information maximization (LD-InfoMax) framework for blind separation of correlated sources [5] (This is the batch version of our proposed online biologically plausible framework)
+PMF.py                | Implementation of Polytopic Matrix Factorization [6]
+ICA.py                | Implementation of several independent component analysis frameworks 
+bss_utils.py          | Utility functions for blind source separation experiments
+dsp_utils.py          | Utility functions for digital signal processing
+polytope_utils.py     | Utility functions for polytope operations
+visualization_utils.py| Utility functions for visualizations
+numba_utils.py        | Utility functions using numba library of Python
+general_utils.py      | Other utility functions
 
 ## Notebook_Examples
 This file includes the jupyter notebook experiments of the algorithms CorInfoMax, LD-InfoMax, BCA, PMF, BSM, NSM, and ICA. The subfolder names are given accordingly, and notebooks are presented to experiment and visualize BSS settings with different algorithms. These notebooks can also be used for debugging and tutorials.
