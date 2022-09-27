@@ -19,8 +19,8 @@ All the simulation codes for the paper manuscript are included inside the folder
     ``` python CorInfoMax_GeneralPolytope5dimV3.py```
 
  * When you run these python simulations, the following two pickle files will be created which contains the SINR results of each algorithm. 
-    ** "Simulations/Results/simulation_results_general_polytope_5dimV2.pkl"
-    ** "Simulations/Results/simulation_results_general_polytope_5dimV3.pkl"
+    * "Simulations/Results/simulation_results_general_polytope_5dimV2.pkl"
+    * "Simulations/Results/simulation_results_general_polytope_5dimV3.pkl"
 
  * The jupyter notebook "Simulations/AnalyzeSimulationResultsFinal/PlotSimulationResults_GeneralPoly.ipynb" reads the above pickle files and visualize the results. Moreover, the performances of the baseline algorithms are also reported.
 
