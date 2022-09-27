@@ -1,0 +1,1 @@
+For the sparse dictionary learning experiment, you need the prewhitened image pathces included in this folder. Please check the paper.
