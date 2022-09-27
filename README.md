@@ -28,35 +28,19 @@ To replicate each simulation in the paper, you can adapt the above procedure for
 
 # Python Version and Dependencies
 
-* Python Version: Python 3.8.12
+:-------------------------:|:-------------------------:
+Python Version| Python 3.8.12
 
-* pip version : 21.2.4
+pip version | 21.2.4
 
-* Required Python Packages: Specified in requirements.txt file.
+Required Python Packages | Specified in requirements.txt file.
 
-* Platform Info : "OS: Linux (x86_64-pc-linux-gnu) CPU: Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"
+Platform Info | OS: Linux (x86_64-pc-linux-gnu) CPU: Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz
 
 # Folder Contents
 
 ## src
 This file is the source code for each BSS algorithm we used in the paper. The following is the full list.
-<!-- Python Script  |  Explanation
-:-------------------------:|:-------------------------:
-* BSSbase.py            | Base class for blind source separation algorithms
-* CorInfoMaxBSS.py      : Our proposed correlative information maximization (framework) neural networks 
-* BCA.py                : Biologically plausible online bounded component analysis (BCA) [1] implementation
-* WSMBSS.py             : Implementation of Weighted similarity mathcing-based (WSM) determinant maximization neural networks for blind separation of correlated sources [2]
-* BSMBSS.py             : Implementation Bounded similarity matching (BSM) for uncorrelated antisparse sources [3]
-* NSMBSS.py             : Implementation of Nonnegative similarity matching (NSM) for uncorrelated nonnegative sources [4]
-* LDMIBSS.py            : Implementation of Log-det (LD-) Mutual Information maximization (LD-InfoMax) framework for blind separation of correlated sources [5](This is the batch version of our proposed online biologically plausible framework)
-* PMF.py                : Implementation of Polytopic Matrix Factorization [6]
-* ICA.py                : Implementation of several independent component analysis frameworks 
-* bss_utils.py          : Utility functions for blind source separation experiments
-* dsp_utils.py          : Utility functions for digital signal processing
-* polytope_utils.py     : Utility functions for polytope operations
-* visualization_utils.py: Utility functions for visualizations
-* numba_utils.py        : Utility functions using numba library of Python
-* general_utils.py      : Other utility functions -->
 
 Python Script  |  Explanation
 :-------------------------:|:-------------------------:
@@ -64,7 +48,7 @@ BSSbase.py            | Base class for blind source separation algorithms
 CorInfoMaxBSS.py      | Our proposed correlative information maximization (framework) neural networks 
 BCA.py                | Biologically plausible online bounded component analysis (BCA) [1] implementation
 WSMBSS.py             | Implementation of Weighted similarity mathcing-based (WSM) determinant maximization neural networks for blind separation of correlated sources [2]
-BSMBSS.py             | Implementation Bounded similarity matching (BSM) for uncorrelated antisparse sources [3]
+BSMBSS.py             | Implementation of Bounded similarity matching (BSM) for uncorrelated antisparse sources [3]
 NSMBSS.py             | Implementation of Nonnegative similarity matching (NSM) for uncorrelated nonnegative sources [4]
 LDMIBSS.py            | Implementation of Log-det (LD-) Mutual Information maximization (LD-InfoMax) framework for blind separation of correlated sources [5] (This is the batch version of our proposed online biologically plausible framework)
 PMF.py                | Implementation of Polytopic Matrix Factorization [6]
