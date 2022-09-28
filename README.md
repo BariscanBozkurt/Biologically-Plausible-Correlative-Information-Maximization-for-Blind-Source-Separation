@@ -41,8 +41,8 @@ To replicate each simulation in the paper, you can adapt the above procedure for
 ## src
 This file is the source code for each BSS algorithm we used in the paper. The following is the full list.
 
-Python Script  |  Explanation
-:-------------------------:|:-------------------------:
+Python Script         |  Explanation
+:--------------------:|:-------------------------:
 BSSbase.py            | Base class for blind source separation algorithms
 CorInfoMaxBSS.py      | Our proposed correlative information maximization (framework) neural networks 
 BCA.py                | Biologically plausible online bounded component analysis (BCA) [1] implementation
@@ -65,8 +65,8 @@ This file includes the jupyter notebook experiments of the algorithms CorInfoMax
 ## Simulations
 Each simulation presented in the paper can be reproduced using the codes in this folder.
 
-Simulation Folder  |  Explanation
-:-------------------------:|:-------------------------:
+Simulation Folder                     |  Explanation
+:------------------------------------:|:-------------------------:
 AntisparseCorrelated                  | (Signed) antisparse source separation simulations
 NonnegativeAntisparseCorrelated       | Nonnegative antisparse source separation simulations
 SparseNoisy                           | Sparse source separation simulations
@@ -78,7 +78,6 @@ VideoSeparation                       | Video separation demo code
 ImageSeparation                       | Image separation demo (not presented in the paper)
 4PAM_DigitalComm                      | A BSS simulation setting with 4PAM digital communication signals
 AblationStudies                       | Ablation studies on hyperparameter selections
-
 AnalyzeSimulationResultsFinal         | Producing the plots and table for simulation results
 
 # References
