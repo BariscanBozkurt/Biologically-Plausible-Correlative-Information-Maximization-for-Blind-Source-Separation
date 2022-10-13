@@ -1,6 +1,6 @@
 # Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation
 
-This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation ([paper] (https://arxiv.org/abs/2209.12894)). All the codes are written in Python 3. This paper proposes biologically plausible neural networks for blind separation of correlated sources exploiting prior domain assumptions via an information maximization criterion.
+This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation ([paper](https://arxiv.org/abs/2209.12894)). All the codes are written in Python 3. This paper proposes biologically plausible neural networks for blind separation of correlated sources exploiting prior domain assumptions via an information maximization criterion.
 
 ## CorInfoMax Neural Networks
 
