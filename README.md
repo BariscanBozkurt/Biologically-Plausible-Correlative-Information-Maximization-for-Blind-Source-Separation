@@ -1,6 +1,6 @@
 # Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation
 
-This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation, which is submitted to ICLR 2023. All the codes are written in Python 3. This paper proposes biologically plausible neural networks for blind separation of correlated sources exploiting prior domain assumptions via an information maximization criterion.
+This Github repository includes the implementation of the Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation ([paper link:] (https://arxiv.org/abs/2209.12894)). All the codes are written in Python 3. This paper proposes biologically plausible neural networks for blind separation of correlated sources exploiting prior domain assumptions via an information maximization criterion.
 
 ## CorInfoMax Neural Networks
 
@@ -103,3 +103,25 @@ using biological neural networks. Neural computation, 29(11):2925–2954, 2017
 [6] Gokcan Tatli and Alper T. Erdogan. Polytopic matrix factorization: Determinant maximization
 based criterion and identifiability. IEEE Transactions on Signal Processing, 69:5431–5447, 2021.
 doi: 10.1109/TSP.2021.3112918.
+
+## Citation
+If you find this useful, please cite:
+```
+@misc{CorInfoMax,
+  doi = {10.48550/ARXIV.2210.04222},
+  
+  url = {https://arxiv.org/abs/2210.04222},
+  
+  author = {Bozkurt, Bariscan and Isfendiyaroglu, Ates and Pehlevan, Cengiz and Erdogan, Alper T.},
+  
+  keywords = {Signal Processing (eess.SP), Machine Learning (cs.LG), FOS: Electrical engineering, electronic engineering, information engineering, FOS: Electrical engineering, electronic engineering, information engineering, FOS: Computer and information sciences, FOS: Computer and information sciences},
+  
+  title = {Correlative Information Maximization Based Biologically Plausible Neural Networks for Correlated Source Separation},
+  
+  publisher = {arXiv},
+  
+  year = {2022},
+  
+  copyright = {Creative Commons Attribution 4.0 International}
+}
+```
