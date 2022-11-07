@@ -2340,6 +2340,8 @@ class CorInfoMaxVideoSeparation(OnlineCorInfoMax):
     def seperate_videos(self, Wf_list, X, imsize = [360, 640], n_pixel_per_frame=5, 
                         n_iter = 1000000, neural_dynamic_iterations = 250, 
                         neural_lr_start = 0.9, neural_lr_stop = 1e-3, 
+                        synaptic_lr_rule="constant",
+                        synaptic_lr_decay_divider=5000,
                         neural_loop_lr_rule="divide_by_loop_index",
                         neural_lr_decay_multiplier=0.005,
                         use_error_corr_structured_connectivity=False,
@@ -2392,7 +2394,20 @@ class CorInfoMaxVideoSeparation(OnlineCorInfoMax):
 
             e = y - W @ x_current
 
-            W = W + muW * np.outer(e, x_current)
+            if synaptic_lr_rule == "constant":
+                muW_ = muW
+            elif synaptic_lr_rule == "divide_by_log_index":
+                muW_ = np.max(
+                    [
+                        muW
+                        / (1 + np.log(2 + (i_sample // synaptic_lr_decay_divider))),
+                        1e-3,
+                    ]
+                )
+            elif synaptic_lr_rule == "divide_by_index":
+                muW_ = np.max([muW / (i_sample // synaptic_lr_decay_divider), 1e-3])
+
+            W = W + muW_ * np.outer(e, x_current)
 
             z = By @ y
             By = (1/lambday) * (By - gamy * np.outer(z, z))
@@ -2418,6 +2433,9 @@ class CorInfoMaxVideoSeparation(OnlineCorInfoMax):
                         display(pl.gcf())   
             sample_counter += 1
         return X
+
+# class CorInfoMaxSoundSeparationWavelet(OnlineCorInfoMax):
+
 
 ######## BELOW CLASSES ARE FOR EXPERIMENTAL PURPOSES.DO NOT TAKE THEM SERIOUS FOR NOW.
 ######## THESE ARE STILL UNDER DEVELOPMENT.

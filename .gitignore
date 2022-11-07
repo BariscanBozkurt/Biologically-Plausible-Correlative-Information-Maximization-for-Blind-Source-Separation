@@ -14,6 +14,7 @@ Simulations/VideoSeparation/Mix-Videos/*
 Simulations/VideoSeparation/Separated-Videos/*
 Simulations/VideoSeparation/Seperated-Videos/*
 Simulations/VideoSeparation/FINAL.avi
+Simulations/VideoSeparation/FINAL2.avi
 Simulations/AnalyzeSimulationResults
 Simulations/AnalyzeSimulationResultsWSM
 Simulations/WSM_Simulations
@@ -21,3 +22,9 @@ Simulations/SparseDictionaryLearning1
 Simulations/SparseDictionaryLearningNew
 Simulations/SparseDictionaryLearningNew2
 Untitled*
+SoundSeparationDebug
+Debug*
+*Debug
+*Debug*
+data/Sounds 
+data/Sounds/*
